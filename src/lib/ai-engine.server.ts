@@ -60,48 +60,32 @@ function getTextFromParts(parts: AiPart[]): string {
     .trim();
 }
 
-function minimumReplyLengthFor(parts: AiPart[]): number {
-  const text = getTextFromParts(parts).toLowerCase();
-  if (!text || /^(salama|bonjour|bjr|cc|coucou|hello|hi|manao ahoana)[\s!.?]*$/i.test(text)) {
-    return 220;
-  }
-  if (
-    /\b(azavao|hazavao|fanazavana|detail|détail|lien|prix|vidiny|formation|inscription|retrait|airtel|mvola|orange money|ipweb|linkedin|blockbuster|travail|asa|application|comment|ahoana|inona|momba)\b/i.test(
-      text,
-    )
-  ) {
-    return 900;
-  }
-  return 550;
-}
-
-function appendCompletenessInstructions(systemPrompt: string, minChars: number): string {
-  return `${systemPrompt}\n\nCONTRAINTE DE COMPLÉTUDE OBLIGATOIRE :\n- La réponse doit être complète, concrète et continuer jusqu'à la fin de l'explication utile.\n- Ne t'arrête jamais après 2 ou 3 phrases si la question demande une explication, un service, un lien, un prix, une procédure ou un guide.\n- Objectif minimum : environ ${minChars} caractères quand la demande n'est pas une simple salutation.\n- Termine toujours par une phrase de clôture claire pour montrer que la réponse est finie.`;
+function appendClarityInstructions(systemPrompt: string): string {
+  return `${systemPrompt}\n\nDIRECTIVES DE PERTINENCE ET CLARTÉ :\n- Réponds DIRECTEMENT et PRÉCISÉMENT à la question du client sans verbiage inutile.\n- Reste concis, clair, naturel et chaleureux.\n- Interdiction absolue d'afficher des réflexions, analyses, brouillons ou balises 'Thinking'.`;
 }
 
 function looksTruncated(text: string): boolean {
   const cleaned = text.trim();
   if (!cleaned) return true;
-  if (/[.!?…]$/.test(cleaned)) return false;
+  if (/[.!?…:)]$/.test(cleaned)) return false;
   return /\b(ary|fa|ka|dia|satria|raha|avec|de|du|des|et|ou|pour|par|sur|amin'ny|momba ny)$/i.test(
     cleaned,
   );
 }
 
-async function expandIncompleteReply(opts: {
+async function retryTruncatedReply(opts: {
   userId: string;
   systemPrompt: string;
   history: ChatTurn[];
   parts: AiPart[];
   currentReply: string;
   allowLinks?: boolean;
-  minChars: number;
 }): Promise<{ raw: string; provider: string } | null> {
-  const expansionPrompt =
-    "Ny valiny teo aloha dia fohy loatra na toa tapaka. Avereno soratana ho valiny IRAY feno sy mitohy, manaraka tsara ny prompt, miaraka amin'ny antsipiriany ilaina, dingana mazava raha ilaina, ary famaranana mazava. Aza milaza hoe nisy valiny teo aloha.\n\n" +
-    `Valiny fohy teo aloha:\n"""${opts.currentReply}"""`;
-  const expandedParts: AiPart[] = [...opts.parts, { text: expansionPrompt }];
-  const strictPrompt = appendCompletenessInstructions(opts.systemPrompt, opts.minChars);
+  const retryPrompt =
+    "Tohizo na avereno feno amin'ny fomba mazava sy fohy ny valiny teo aloha izay toa tapaka. Aza mampiasa teny fampidirana na fandinihana (thinking).\n\n" +
+    `Valiny tapaka:\n"""${opts.currentReply}"""`;
+  const retryParts: AiPart[] = [...opts.parts, { text: retryPrompt }];
+  const strictPrompt = appendClarityInstructions(opts.systemPrompt);
 
   const { data: settings } = await supabaseAdmin
     .from("settings")
@@ -114,12 +98,12 @@ async function expandIncompleteReply(opts: {
   if (lovableEnabled) {
     try {
       return {
-        raw: await callLovableAi(strictPrompt, opts.history, expandedParts),
-        provider: "lovable-ai:expanded",
+        raw: await callLovableAi(strictPrompt, opts.history, retryParts),
+        provider: "lovable-ai:completed",
       };
     } catch (e) {
       console.warn(
-        "[Lovable AI expansion] fallback vers Gemini:",
+        "[Lovable AI retry] fallback vers Gemini:",
         e instanceof Error ? e.message : e,
       );
     }
@@ -129,11 +113,11 @@ async function expandIncompleteReply(opts: {
     const key = await pickGeminiKey(opts.userId);
     if (!key) break;
     try {
-      const raw = await callGemini(key.api_key, strictPrompt, opts.history, expandedParts, modelToUse);
+      const raw = await callGemini(key.api_key, strictPrompt, opts.history, retryParts, modelToUse);
       await markKeyUsed(key.id);
-      return { raw, provider: `gemini:${key.label}:expanded` };
+      return { raw, provider: `gemini:${key.label}:completed` };
     } catch (e) {
-      console.error("[Gemini expansion] error", key.label, e);
+      console.error("[Gemini retry] error", key.label, e);
       await markKeyError(key.id, key.error_count ?? 0);
     }
   }
@@ -286,36 +270,45 @@ export function sanitizeAiResponse(text: string): string {
   if (!text) return "";
   let cleaned = text;
 
-  // Remove <think>...</think> or ```thinking...```
+  // 1. Remove XML/markdown thinking tags
   cleaned = cleaned.replace(/<think>[\s\S]*?<\/think>/gi, "");
-  cleaned = cleaned.replace(/```thinking[\s\S]*?```/gi, "");
+  cleaned = cleaned.replace(/<thought>[\s\S]*?<\/thought>/gi, "");
+  cleaned = cleaned.replace(/<reasoning>[\s\S]*?<\/reasoning>/gi, "");
+  cleaned = cleaned.replace(/```(?:thinking|thought|reasoning)[\s\S]*?```/gi, "");
 
-  // Remove paragraphs or lines containing internal reasoning, planning, or rules check
+  // 2. If the text has an explicit "Final response:" / "Réponse finale:" marker after thoughts, extract from there
+  const finalMarkers = [
+    /(?:^|\n)(?:final response|reponse finale|réponse finale|valiny mivantana|final answer)\s*:\s*\n?/i,
+  ];
+  for (const marker of finalMarkers) {
+    const parts = cleaned.split(marker);
+    if (parts.length > 1 && parts[parts.length - 1].trim().length > 5) {
+      cleaned = parts[parts.length - 1].trim();
+      break;
+    }
+  }
+
+  // 3. Remove paragraphs and lines containing internal reasoning, planning, or rules check
   const paragraphs = cleaned.split(/\n\s*\n/);
   const cleanParagraphs = paragraphs.filter((p) => {
     const lower = p.trim().toLowerCase();
     if (
-      lower.includes("the user's question") ||
-      lower.includes("let's verify") ||
-      lower.includes("catalog rule") ||
-      lower.includes("final check") ||
-      lower.includes("one detail") ||
-      lower.includes("final response structure") ||
-      lower.includes("can be interpreted as") ||
-      lower.includes("since i am a teacher") ||
-      lower.includes("i must provide the list") ||
-      lower.includes("total length is sufficient") ||
-      lower.includes("i will ensure") ||
-      lower.includes("self-correction") ||
-      lower.includes("facebook advertising expert") ||
-      lower.includes("attractive, professional") ||
-      lower.includes("no markdown") ||
-      lower.includes("character count") ||
-      lower.startsWith("ready.") ||
       lower.startsWith("thinking:") ||
       lower.startsWith("thought:") ||
+      lower.startsWith("thoughts:") ||
       lower.startsWith("analyse:") ||
+      lower.startsWith("analysis:") ||
+      lower.startsWith("reasoning:") ||
+      lower.startsWith("penser:") ||
+      lower.startsWith("réflexion:") ||
+      lower.startsWith("reflexion:") ||
+      lower.startsWith("internal notes:") ||
+      lower.startsWith("draft:") ||
+      lower.startsWith("plan:") ||
+      lower.startsWith("let's think") ||
+      lower.startsWith("let me think") ||
       lower.startsWith("let me analyze") ||
+      lower.startsWith("let me see") ||
       lower.startsWith("hook:") ||
       lower.startsWith("value proposition:") ||
       lower.startsWith("trust/ease:") ||
@@ -324,8 +317,23 @@ export function sanitizeAiResponse(text: string): string {
       lower.startsWith("description:") ||
       lower.startsWith("benefit:") ||
       lower.startsWith("trust:") ||
-      lower.trim() === "check." ||
-      lower.trim() === "check" ||
+      lower.startsWith("check:") ||
+      lower === "check." ||
+      lower === "check" ||
+      lower === "ready." ||
+      lower.includes("the user's question") ||
+      lower.includes("the user is asking") ||
+      lower.includes("the customer is asking") ||
+      lower.includes("let's verify") ||
+      lower.includes("catalog rule") ||
+      lower.includes("final check") ||
+      lower.includes("total length is sufficient") ||
+      lower.includes("i will ensure") ||
+      lower.includes("self-correction") ||
+      lower.includes("facebook advertising expert") ||
+      lower.includes("attractive, professional") ||
+      lower.includes("no markdown") ||
+      lower.includes("character count") ||
       lower.includes("(text looks good")
     ) {
       return false;
@@ -335,12 +343,34 @@ export function sanitizeAiResponse(text: string): string {
 
   cleaned = cleanParagraphs.join("\n\n").trim();
 
-  // If there are multiple blocks and the model outputs a draft then final, or if text still has draft items, filter out lines starting with prompt keywords
+  // 4. Line-by-line cleanup of residual meta lines
   const lines = cleaned.split("\n");
   const actualLines: string[] = [];
+  let inThoughtBlock = false;
+
   for (const line of lines) {
     const l = line.trim();
     const low = l.toLowerCase();
+
+    if (
+      /^(?:thinking|thought|thoughts|reasoning|analyse|analysis|penser|réflexion|reflexion)\s*:/i.test(low) ||
+      low.startsWith("let me analyze") ||
+      low.startsWith("let's analyze")
+    ) {
+      inThoughtBlock = true;
+      continue;
+    }
+
+    if (inThoughtBlock) {
+      if (!l) continue;
+      // Stop skipping if we hit a genuine Malagasy / French customer response opening
+      if (/^(salama|misaotra|bonjour|bonsoir|bjr|cc|coucou|hello|hi|manao ahoana|eny|tsia|oui|non|raha|ny|momba|mikasika|ireto|ity|io|izahay|afaka)\b/i.test(l)) {
+        inThoughtBlock = false;
+      } else {
+        continue;
+      }
+    }
+
     if (
       low.startsWith("hook:") ||
       low.startsWith("value proposition:") ||
@@ -350,9 +380,12 @@ export function sanitizeAiResponse(text: string): string {
       low.startsWith("description:") ||
       low.startsWith("benefit:") ||
       low.startsWith("trust:") ||
+      low.startsWith("check:") ||
       low.includes("self-correction") ||
       low.includes("(text looks good") ||
-      low === "check."
+      low === "check." ||
+      low === "check" ||
+      low === "ready."
     ) {
       continue;
     }
@@ -360,7 +393,7 @@ export function sanitizeAiResponse(text: string): string {
   }
 
   if (actualLines.length > 0) {
-    cleaned = actualLines.join("\n").trim();
+    cleaned = actualLines.join("\n").replace(/\n{3,}/g, "\n\n").trim();
   }
 
   return cleaned;
@@ -377,11 +410,6 @@ async function callGemini(
   if (!cleanKey) throw new Error("Clé API Gemini vide");
 
   const contents = normalizeContentsForGemini(history, parts);
-  const body = {
-    system_instruction: { parts: [{ text: systemPrompt }] },
-    contents,
-    generationConfig: { temperature: 0.5, maxOutputTokens: 2000 },
-  };
 
   // 1. Auto-discover available models from API key dynamically
   const discovery = await fetchAvailableGeminiModels(cleanKey);
@@ -406,31 +434,57 @@ async function callGemini(
 
   let lastError = "";
   for (const m of uniqueModels) {
-    try {
-      const res = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent?key=${cleanKey}`,
-        { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) },
-      );
-      if (!res.ok) {
-        const t = await res.text();
-        lastError = `Gemini (${m}): ${t.slice(0, 180)}`;
-        console.warn(`[gemini] model ${m} failed:`, lastError);
-        continue;
+    // Attempt with thinking disabled first, then without if not supported
+    for (const disableThinking of [true, false]) {
+      try {
+        const genConfig: Record<string, any> = { temperature: 0.35, maxOutputTokens: 2000 };
+        if (disableThinking) {
+          genConfig.thinkingConfig = { thinkingBudget: 0 };
+        }
+        const body = {
+          system_instruction: { parts: [{ text: systemPrompt }] },
+          contents,
+          generationConfig: genConfig,
+        };
+
+        const res = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent?key=${cleanKey}`,
+          { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) },
+        );
+
+        if (!res.ok) {
+          const t = await res.text();
+          // If thinkingConfig is unsupported on this model, retry next loop without thinkingConfig
+          if (disableThinking && (t.includes("thinkingConfig") || t.includes("INVALID_ARGUMENT") || t.includes("Unknown name"))) {
+            continue;
+          }
+          lastError = `Gemini (${m}): ${t.slice(0, 180)}`;
+          console.warn(`[gemini] model ${m} failed:`, lastError);
+          break; // move to next model
+        }
+
+        const json: any = await res.json();
+        const candidate = json?.candidates?.[0];
+        const finish = candidate?.finishReason;
+        const candidateParts = candidate?.content?.parts ?? [];
+        // Filter out thought parts
+        const nonThoughtParts = candidateParts.filter(
+          (p: any) => !p.thought && !p.thought_process && p.type !== "thought",
+        );
+        const effectiveParts = nonThoughtParts.length > 0 ? nonThoughtParts : candidateParts;
+        const text = effectiveParts.map((p: any) => p.text ?? "").join("").trim();
+
+        if (finish && finish !== "STOP" && finish !== "MAX_TOKENS") {
+          console.warn("[gemini] finishReason non-STOP:", finish);
+        }
+        if (finish === "MAX_TOKENS") {
+          console.warn("[gemini] réponse tronquée par MAX_TOKENS, longueur:", text.length);
+        }
+        if (!text) throw new Error(`Réponse vide du modèle ${m} (finishReason=${finish ?? "unknown"})`);
+        return sanitizeAiResponse(text);
+      } catch (err: any) {
+        lastError = err.message || String(err);
       }
-      const json: any = await res.json();
-      const candidate = json?.candidates?.[0];
-      const finish = candidate?.finishReason;
-      const text = candidate?.content?.parts?.map((p: any) => p.text ?? "").join("") ?? "";
-      if (finish && finish !== "STOP" && finish !== "MAX_TOKENS") {
-        console.warn("[gemini] finishReason non-STOP:", finish);
-      }
-      if (finish === "MAX_TOKENS") {
-        console.warn("[gemini] réponse tronquée par MAX_TOKENS, longueur:", text.length);
-      }
-      if (!text) throw new Error(`Réponse vide du modèle ${m} (finishReason=${finish ?? "unknown"})`);
-      return sanitizeAiResponse(text);
-    } catch (err: any) {
-      lastError = err.message || String(err);
     }
   }
 
@@ -464,7 +518,7 @@ async function callLovableAi(
   const res = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
     method: "POST",
     headers: { "content-type": "application/json", "Lovable-API-Key": key },
-    body: JSON.stringify({ model: LOVABLE_MODEL, messages, temperature: 0.5, max_tokens: 2000 }),
+    body: JSON.stringify({ model: LOVABLE_MODEL, messages, temperature: 0.35, max_tokens: 2000 }),
   });
   if (!res.ok) throw new Error(`Lovable AI ${res.status}: ${(await res.text()).slice(0, 200)}`);
   const json: any = await res.json();
@@ -480,12 +534,10 @@ export async function generateAiReply(opts: {
   history?: ChatTurn[];
   parts: AiPart[];
   allowLinks?: boolean;
-  minChars?: number;
 }): Promise<{ text: string; provider: string }> {
   const { userId, systemPrompt, parts, allowLinks } = opts;
   const history = opts.history ?? [];
-  const minChars = opts.minChars ?? minimumReplyLengthFor(parts);
-  const strictSystemPrompt = appendCompletenessInstructions(systemPrompt, minChars);
+  const strictSystemPrompt = appendClarityInstructions(systemPrompt);
 
   const { data: settings } = await supabaseAdmin
     .from("settings")
@@ -499,18 +551,17 @@ export async function generateAiReply(opts: {
     try {
       const raw = await callLovableAi(strictSystemPrompt, history, parts);
       const cleaned = sanitizeReply(raw, allowLinks);
-      if (cleaned.length < minChars || looksTruncated(cleaned)) {
-        const expanded = await expandIncompleteReply({
+      if (looksTruncated(cleaned)) {
+        const completed = await retryTruncatedReply({
           userId,
           systemPrompt,
           history,
           parts,
           currentReply: cleaned,
           allowLinks,
-          minChars,
         });
-        if (expanded)
-          return { text: sanitizeReply(expanded.raw, allowLinks), provider: expanded.provider };
+        if (completed)
+          return { text: sanitizeReply(completed.raw, allowLinks), provider: completed.provider };
       }
       return { text: cleaned, provider: "lovable-ai" };
     } catch (e) {
@@ -540,18 +591,17 @@ export async function generateAiReply(opts: {
       const raw = await callGemini(cleanKey, strictSystemPrompt, history, parts, modelToUse);
       await markKeyUsed(key.id);
       const cleaned = sanitizeReply(raw, allowLinks);
-      if (cleaned.length < minChars || looksTruncated(cleaned)) {
-        const expanded = await expandIncompleteReply({
+      if (looksTruncated(cleaned)) {
+        const completed = await retryTruncatedReply({
           userId,
           systemPrompt,
           history,
           parts,
           currentReply: cleaned,
           allowLinks,
-          minChars,
         });
-        if (expanded)
-          return { text: sanitizeReply(expanded.raw, allowLinks), provider: expanded.provider };
+        if (completed)
+          return { text: sanitizeReply(completed.raw, allowLinks), provider: completed.provider };
       }
       return { text: cleaned, provider: `gemini:${key.label}` };
     } catch (e) {
@@ -739,22 +789,15 @@ export async function buildSystemPrompt(
   }
 
   const styleRules =
-    "RÈGLES ABSOLUES ET STRICTES DE RÉPONSE :\n" +
-    "1. INTERDICTION FORMELLE d'afficher ton processus de pensée, ton analyse, ton raisonnement ou du texte en anglais. Pas de 'Thinking:', 'Let me check', 'Analyse:', etc.\n" +
-    "2. INTERDICTION DE RÉPÉTER LA QUESTION DU CLIENT. Ne dis jamais 'Vous avez demandé...' ou 'Vous voulez savoir...'. Réponds directement.\n" +
-    "3. Réponds UNIQUEMENT et DIRECTEMENT au message du client dans EXACTEMENT LA MÊME LANGUE qu'il a utilisée (en malgache si le client écrit en malgache, en français s'il écrit en français). N'utilise jamais l'anglais.\n" +
-    "4. Donne DIRECTEMENT la réponse finale prête à être envoyée au client.\n" +
-    "5. Style calme, professionnel, bienveillant, chaleureux et véritablement persuasif — comme un vendeur/conseiller humain expérimenté.\n" +
-    "6. Respecte toujours le client, remercie-le pour son intérêt, valorise sa demande.\n" +
-    "7. Phrases courtes, saut de ligne entre les idées, texte aéré.\n" +
-    "8. N'utilise JAMAIS les caractères * ou # ni aucun markdown.\n" +
-    "9. Pas de listes à puces markdown ; si tu énumères, utilise des chiffres (1. 2. 3.).\n" +
-    "10. Tiens compte de l'historique de la conversation ci-dessous et souviens-toi de ce que l'utilisateur a déjà dit.\n\n" +
-    "RÈGLE CATALOGUE (IMPORTANTE) :\n" +
-    "- Présente la liste complète des formations/produits UNIQUEMENT lors du TOUT PREMIER échange avec ce client (quand l'historique ci-dessous est vide ou ne contient encore aucune réponse de ta part).\n" +
-    "- Aux messages suivants, NE REPRODUIS PLUS la liste. Concentre-toi précisément sur ce que le client demande : explique en détail, réponds à ses questions, rassure-le, mets en avant les bénéfices, propose la prochaine étape.\n" +
-    "- Si le client hésite ou demande conseil, recommande UN seul produit/formation adapté à son besoin plutôt que de tout redonner.\n" +
-    "- Ne redemande jamais des informations déjà données dans l'historique.";
+    "RÈGLES ABSOLUES ET STRICTES DE RÉPONSE (PRIORITÉ MAXIMALE) :\n" +
+    "1. RÉPONSE DIRECTE ET PRÉCISE : Réponds DIRECTEMENT à la question du client sans détour, sans préambule inutile et sans répéter la question du client.\n" +
+    "2. AUCUNE PENSÉE NI ANALYSE VISIBLE : INTERDICTION FORMELLE d'inclure ton processus de réflexion, brouillon, 'Thinking:', 'Thought:', 'Hook:', 'Check', 'Let me check', 'Analyse:' ou du texte en anglais. Donne UNIQUEMENT la réponse finale pour le client.\n" +
+    "3. LANGUE EXACTE DU CLIENT : Réponds STRICTEMENT dans la même langue que le client (en malgache si le client écrit en malgache, en français s'il écrit en français). N'utilise JAMAIS l'anglais.\n" +
+    "4. CONCIS ET PERTINENT : Si le client demande un prix, une modalité ou un renseignement précis, réponds UNIQUEMENT sur cet élément précis sans étaler tout le catalogue ni ajouter de longs textes hors-sujet.\n" +
+    "5. TON NATUREL ET CHALEUREUX : Ton poli, accueillant, bienveillant et professionnel comme un vrai conseiller humain.\n" +
+    "6. FORMAT PROPRE : Phrases courtes, saut de ligne entre les idées pour un texte facile à lire. N'utilise JAMAIS de markdown (* ou #).\n" +
+    "7. LISTES NUMÉROTÉES : Si tu dois énumérer des étapes, utilise des chiffres normaux (1., 2., 3.).\n" +
+    "8. HISTORIQUE : Tiens compte des échanges précédents dans la conversation pour ne pas reposer les mêmes questions.";
 
   const catalog = await buildCatalogContext(userId);
 
