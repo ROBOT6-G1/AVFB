@@ -149,7 +149,14 @@ function DiscussionsPage() {
                         </div>
                         <div className="whitespace-pre-wrap">{m.content || m.ai_response}</div>
                         {m.media_url && (
-                          <img src={m.media_url} alt="" className="mt-2 rounded max-w-full" />
+                          <div className="mt-2 overflow-hidden rounded-lg border border-white/10 max-w-xs">
+                            <img
+                              src={m.media_url}
+                              alt="Sary"
+                              className="w-full max-h-64 object-cover hover:scale-105 transition-transform duration-200"
+                              loading="lazy"
+                            />
+                          </div>
                         )}
                       </div>
                     </div>

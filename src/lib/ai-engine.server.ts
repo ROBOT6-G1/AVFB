@@ -703,27 +703,29 @@ async function buildCatalogContext(userId: string): Promise<string> {
 
     const imageProtocol =
       "PROTOCOLE PHOTOS PRODUIT (OBLIGATOIRE) :\n" +
-      "Quand le client demande à voir un produit (photos, sary, image, voir, aperçu), " +
-      "ajoute À LA FIN de ta réponse (ligne séparée) le bloc technique :\n" +
+      "Rehefa mangataka sarin'ny vokatra ny client (photos, sary, voir, images, aperçu), " +
+      "ampidiro eo amin'ny faran'ny valin-teninao (amin'ny andalana manokana) ity bloc teknika ity :\n" +
       "[[SEND_IMAGES:NOM EXACT DU PRODUIT]]\n" +
-      "- Le système enverra automatiquement 4 photos du produit au client.\n" +
-      "- Si le client redemande d'autres photos du même produit, remets le même bloc : les 4 suivantes seront envoyées.\n" +
-      "- Ne décris pas ce bloc au client, il est technique et invisible.\n" +
-      "- Un seul bloc SEND_IMAGES par réponse.";
+      "- Handefa sary 4 amin'io vokatra io avy hatrany ny rafitra.\n" +
+      "- Raha mbola mangataka sary fanampiny amin'io vokatra io ihany izy, avereno ity bloc ity : halefa ireo 4 manaraka.\n" +
+      "- Aza tononina na hazavaina amin'ny mpanjifa io bloc io fa miafina izy io.\n" +
+      "- Bloc iray ihany isaky ny valin-teny.";
 
     const orderProtocol =
-      "PROTOCOLE COMMANDE VENTE (OBLIGATOIRE) :\n" +
-      "Avant de conclure une vente, tu DOIS demander au client :\n" +
-      "1) Son nom Facebook complet.\n" +
-      "2) Un numéro WhatsApp ou téléphone où on peut le joindre.\n" +
-      "3) SON ADRESSE COMPLÈTE de livraison (quartier, ville, points de repère).\n" +
-      "Une fois ces informations obtenues ET la commande confirmée, ajoute à la fin de ta réponse (ligne séparée) :\n" +
-      `[[ORDER:{"type":"sales","product":"NOM EXACT DU PRODUIT","quantity":1,"client_fb_name":"...","client_whatsapp":"...","client_address":"...","payment_reference":"...","notes":"..."}]]\n` +
-      '- Remplis les champs connus, laisse les autres à "".\n' +
-      "- Ce bloc est invisible pour le client.\n" +
-      "- Un seul bloc ORDER par réponse, uniquement quand la commande est réellement confirmée.";
+      "PROTOCOLE COMMANDE TSIKILIKELY / ÉTAPE PAR ÉTAPE (STRICTEMENT OBLIGATOIRE) :\n" +
+      "Rehefa te hividy na hanao commande ny client dia ANONTANIO TSIKILIKELY ISAKY NY VALIN-TENY ireo fampahalalana ilaina (TSY AZO ANGATAHINA MIARAKA DAHOLO INDRAY MITORAKA, ary jereo tsara ny tantaran'ny resaka / historique mba tsy hamerenana fanontaniana efa voavaly) :\n" +
+      "• Dingana 1 : ANARANA FENO — Anontanio ny anarana fenon'ny mpanjifa (raha mbola tsy fantatra ao amin'ny resaka).\n" +
+      "• Dingana 2 : LAHARANA FINDAY — Rehefa azo ny anarana dia anontanio ny laharana finday afaka iantsoana azy na WhatsApp.\n" +
+      "• Dingana 3 : ADIRESY FENO MAZAVA — Rehefa azo ny laharana dia anontanio ny adiresy mazava misy azy (Faritra / Région, Distrika / District, Fokontany, ary toerana famantarana / repère).\n" +
+      "• Dingana 4 : FOMBA FANDOAVAM-BOLA SY FAMARANANA :\n" +
+      "   - Raha 'Paiement avant livraison / Par numéros' : Omeo ny laharana fandoavam-bola (Mvola, Airtel Money, Orange Money) ary angataho ny référence sy ny anaran'ny mpanefa. Rehefa azo izany dia ampidiro ny bloc ORDER.\n" +
+      "   - Raha 'Paiement à la livraison / Contact client' : Rehefa azo ireo 3 voalohany (Anarana, Laharana, Adiresy mazava) dia ampidiro AVY HATRANY ny bloc ORDER ary lazao amin'ny mpanjifa fa voaray soa aman-tsara ny commande-ny ary haterin'ny mpanao livraison aminy.\n\n" +
+      "BLOC TECHNIQUE ORDER (ampidiro eo amin'ny farany indrindra amin'ny andalana manokana, rehefa feno ny fampahalalana) :\n" +
+      `[[ORDER:{"type":"sales","product":"NOM EXACT DU PRODUIT","quantity":1,"client_fb_name":"ANARANA","client_phone":"LAHARANA","client_whatsapp":"WHATSAPP","client_address":"ADIRESY (REGION DISTRICT FOKONTANY REPERE)","payment_reference":"REFERENCE NA VIDE","notes":""}]]\n` +
+      "- Tsy maintsy ampidirina ity bloc ORDER ity mba hiditra mivantana ao amin'ny pejy Commandes ny commande.\n" +
+      "- Tsy hita maso ity bloc ity, aza hazavaina amin'ny mpanjifa.";
 
-    return `CATALOGUE PRODUITS :\n${list}\n\n${pm ? `NUMÉROS DE PAIEMENT :\n${pm}\n\n` : ""}RÈGLES IMPORTANTES :\n- Vérifie toujours le stock disponible avant de confirmer.\n- Pour un paiement "numéros", donne les numéros et demande référence + nom d'envoi.\n- Pour "contact client", demande nom Facebook + WhatsApp/téléphone + adresse complète.\n- Confirme toujours nom du produit, prix, quantité ET adresse.\n\n${linkRule}\n\n${imageProtocol}\n\n${orderProtocol}`;
+    return `CATALOGUE PRODUITS :\n${list}\n\n${pm ? `NUMÉROS DE PAIEMENT :\n${pm}\n\n` : ""}RÈGLES IMPORTANTES :\n- Vérifie toujours le stock disponible avant de confirmer.\n- Omeo ny vidiny marina sy ny antsipiriany araka ny voalaza etsy ambony.\n- Tsikelikely foana no manontany ny mombamomba ny mpanjifa (Anarana -> Laharana finday -> Adiresy mazava misy Région, District, Fokontany -> Fomba fandoavana).\n- Confirme toujours nom du produit, prix, quantité ET adresse.\n\n${linkRule}\n\n${imageProtocol}\n\n${orderProtocol}`;
   }
 
   return linkRule;
@@ -793,11 +795,12 @@ export async function buildSystemPrompt(
     "1. RÉPONSE DIRECTE ET PRÉCISE : Réponds DIRECTEMENT à la question du client sans détour, sans préambule inutile et sans répéter la question du client.\n" +
     "2. AUCUNE PENSÉE NI ANALYSE VISIBLE : INTERDICTION FORMELLE d'inclure ton processus de réflexion, brouillon, 'Thinking:', 'Thought:', 'Hook:', 'Check', 'Let me check', 'Analyse:' ou du texte en anglais. Donne UNIQUEMENT la réponse finale pour le client.\n" +
     "3. LANGUE EXACTE DU CLIENT : Réponds STRICTEMENT dans la même langue que le client (en malgache si le client écrit en malgache, en français s'il écrit en français). N'utilise JAMAIS l'anglais.\n" +
-    "4. CONCIS ET PERTINENT : Si le client demande un prix, une modalité ou un renseignement précis, réponds UNIQUEMENT sur cet élément précis sans étaler tout le catalogue ni ajouter de longs textes hors-sujet.\n" +
-    "5. TON NATUREL ET CHALEUREUX : Ton poli, accueillant, bienveillant et professionnel comme un vrai conseiller humain.\n" +
-    "6. FORMAT PROPRE : Phrases courtes, saut de ligne entre les idées pour un texte facile à lire. N'utilise JAMAIS de markdown (* ou #).\n" +
-    "7. LISTES NUMÉROTÉES : Si tu dois énumérer des étapes, utilise des chiffres normaux (1., 2., 3.).\n" +
-    "8. HISTORIQUE : Tiens compte des échanges précédents dans la conversation pour ne pas reposer les mêmes questions.";
+    "4. DEMANDE D'INFOS PROGRESSIVE (TSIKILIKELY) : Ne pose JAMAIS toutes les questions de commande d'un coup. Demande UNE information à la fois (1. Nom complet -> 2. Numéro -> 3. Adresse précise -> 4. Modalité de paiement). Ne redemande JAMAIS une info déjà fournie dans la discussion.\n" +
+    "5. PHOTOS DU PRODUIT : Si le client demande à voir ou demande des photos/sary du produit, ajoute [[SEND_IMAGES:NOM DU PRODUIT]] à la fin pour lui envoyer automatiquement les photos de la galerie.\n" +
+    "6. CONCIS ET PERTINENT : Si le client demande un prix, une modalité ou un renseignement précis, réponds UNIQUEMENT sur cet élément précis sans étaler tout le catalogue ni ajouter de longs textes hors-sujet.\n" +
+    "7. TON NATUREL ET CHALEUREUX : Ton poli, accueillant, bienveillant et professionnel comme un vrai conseiller humain.\n" +
+    "8. FORMAT PROPRE : Phrases courtes, saut de ligne entre les idées pour un texte facile à lire. N'utilise JAMAIS de markdown (* ou #).\n" +
+    "9. HISTORIQUE : Tiens compte des échanges précédents dans la conversation pour ne pas reposer les mêmes questions.";
 
   const catalog = await buildCatalogContext(userId);
 
@@ -990,6 +993,19 @@ async function sendMessengerImage(pageToken: string, recipientId: string, url: s
     throw new Error(`Messenger image ${res.status}: ${(await res.text()).slice(0, 200)}`);
 }
 
+const recentMidCache = new Map<string, number>();
+
+function isDuplicateMid(mid: string): boolean {
+  if (!mid) return false;
+  const now = Date.now();
+  for (const [k, ts] of recentMidCache.entries()) {
+    if (now - ts > 300000) recentMidCache.delete(k);
+  }
+  if (recentMidCache.has(mid)) return true;
+  recentMidCache.set(mid, now);
+  return false;
+}
+
 function normalizeName(s: string): string {
   return s
     .toLowerCase()
@@ -1018,10 +1034,16 @@ export function extractAiActions(text: string): {
     return "";
   });
 
-  cleaned = cleaned.replace(/\[\[SEND_IMAGES:\s*([^\]\n]+?)\s*\]\]/gi, (_, name) => {
-    imageRequests.push(String(name).trim());
-    return "";
-  });
+  cleaned = cleaned.replace(
+    /\[\[\s*(?:SEND_?IMAGES?|SEND_?PHOTOS?|IMAGES?|PHOTOS?|SARY|VOIR_?IMAGES?)(?::\s*([^\]\n]*?))?\s*\]\]/gi,
+    (_, name) => {
+      imageRequests.push(String(name || "").trim());
+      return "";
+    },
+  );
+
+  // Remove any remaining internal brackets
+  cleaned = cleaned.replace(/\[\[[\s\S]*?\]\]/g, "");
 
   cleaned = cleaned.replace(/\n{3,}/g, "\n\n").trim();
   return { cleanText: cleaned, orders, imageRequests };
@@ -1078,7 +1100,7 @@ async function persistAiOrder(
       client_fb_id: senderId,
       client_fb_name: order.client_fb_name || senderName || null,
       client_whatsapp: order.client_whatsapp || null,
-      client_phone: order.client_phone || null,
+      client_phone: order.client_phone || order.client_whatsapp || null,
       client_address: order.client_address || null,
       payment_reference: order.payment_reference || null,
       quantity: Number(order.quantity) > 0 ? Number(order.quantity) : 1,
@@ -1105,13 +1127,21 @@ async function sendProductImagesForClient(
     .select("id,name")
     .eq("user_id", userId)
     .eq("is_active", true);
-  const target = normalizeName(productNameFromAi);
-  const product =
-    (prods ?? []).find((p: any) => normalizeName(p.name) === target) ??
-    (prods ?? []).find(
-      (p: any) => normalizeName(p.name).includes(target) || target.includes(normalizeName(p.name)),
-    );
-  if (!product) return { sent: 0, note: `product-not-found:${productNameFromAi}` };
+
+  if (!prods || prods.length === 0) return { sent: 0, note: "no-products" };
+
+  let product: any = null;
+  const target = normalizeName(productNameFromAi || "");
+  if (target) {
+    product =
+      prods.find((p: any) => normalizeName(p.name) === target) ??
+      prods.find(
+        (p: any) => normalizeName(p.name).includes(target) || target.includes(normalizeName(p.name)),
+      );
+  }
+  if (!product) {
+    product = prods[0];
+  }
 
   const { data: images } = await supabaseAdmin
     .from("product_images")
@@ -1129,7 +1159,10 @@ async function sendProductImagesForClient(
     .eq("client_fb_id", senderId)
     .maybeSingle();
   const offsets = ((state as any)?.product_image_offsets ?? {}) as Record<string, number>;
-  const offset = offsets[product.id] ?? 0;
+  let offset = offsets[product.id] ?? 0;
+  if (offset >= images.length) {
+    offset = 0;
+  }
   const batch = images.slice(offset, offset + 4);
   if (batch.length === 0) return { sent: 0, note: "already-sent-all" };
 
@@ -1152,6 +1185,20 @@ async function sendProductImagesForClient(
     try {
       await sendMessengerImage(pageToken, senderId, urlToSend);
       sent++;
+      // Log image into messages_log so it's visible in Discussions UI
+      await insertMessageLog(
+        {
+          user_id: userId,
+          page_id: pageId,
+          sender_id: senderId,
+          content: `[Sary : ${product.name}]`,
+          media_type: "image",
+          media_url: urlToSend,
+          direction: OUTGOING_DIRECTION,
+          status: "sent",
+        },
+        "image-sent",
+      );
     } catch (e) {
       console.error("[sendProductImagesForClient]", e);
     }
@@ -1241,6 +1288,12 @@ async function handleMessengerEvent(page: any, ev: any) {
   if (ev.message?.is_echo) return;
   const msg = ev.message;
   if (!msg) return;
+
+  const mid = msg.mid || "";
+  if (mid && isDuplicateMid(mid)) {
+    console.log("[dedup] ignoring duplicate messenger event mid:", mid);
+    return;
+  }
 
   const { data: settings } = await supabaseAdmin
     .from("settings")

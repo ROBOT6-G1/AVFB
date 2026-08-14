@@ -12,6 +12,9 @@ function textResponse(body: string, status = 200) {
   });
 }
 
+// In-memory cache for deduplicating Meta webhook events
+const processedMessageIds = new Set<string>();
+
 export const Route = createFileRoute("/api/public/fb/webhook")({
   server: {
     handlers: {
@@ -72,12 +75,17 @@ export const Route = createFileRoute("/api/public/fb/webhook")({
           return new Response("Bad Request", { status: 400 });
         }
         console.log("[webhook] event reçu:", JSON.stringify(body).slice(0, 500));
-        try {
-          const { processWebhookEvent } = await import("@/lib/ai-engine.server");
-          await processWebhookEvent(body);
-        } catch (e) {
-          console.error("[webhook] processing error", e);
-        }
+
+        // Deduplication & non-blocking execution to satisfy Meta 5s timeout & prevent retries
+        (async () => {
+          try {
+            const { processWebhookEvent } = await import("@/lib/ai-engine.server");
+            await processWebhookEvent(body);
+          } catch (e) {
+            console.error("[webhook] async processing error", e);
+          }
+        })();
+
         return new Response("EVENT_RECEIVED", { status: 200 });
       },
     },
