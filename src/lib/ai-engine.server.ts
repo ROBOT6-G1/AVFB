@@ -946,8 +946,34 @@ export async function sendMessengerReply(pageToken: string, recipientId: string,
   }
 }
 
-/** Send a single image attachment via Messenger. */
+/** Send a single image attachment via Messenger. Supports both URL and data URLs. */
 async function sendMessengerImage(pageToken: string, recipientId: string, url: string) {
+  if (url.startsWith("data:image/")) {
+    const parsed = stripDataUrl(url);
+    if (parsed) {
+      const bytes = Uint8Array.from(atob(parsed.base64), (c) => c.charCodeAt(0));
+      const blob = new Blob([bytes], { type: parsed.mime });
+      const form = new FormData();
+      form.append("recipient", JSON.stringify({ id: recipientId }));
+      form.append("message", JSON.stringify({ attachment: { type: "image", payload: {} } }));
+      form.append("filedata", blob, "image.jpg");
+      form.append("messaging_type", "RESPONSE");
+
+      const res = await fetch(
+        `https://graph.facebook.com/v21.0/me/messages?access_token=${pageToken}`,
+        {
+          method: "POST",
+          body: form,
+        },
+      );
+      if (!res.ok)
+        throw new Error(
+          `Messenger image upload ${res.status}: ${(await res.text()).slice(0, 200)}`,
+        );
+      return;
+    }
+  }
+
   const res = await fetch(
     `https://graph.facebook.com/v21.0/me/messages?access_token=${pageToken}`,
     {
@@ -1109,12 +1135,22 @@ async function sendProductImagesForClient(
 
   let sent = 0;
   for (const img of batch) {
-    const { data: signed } = await supabaseAdmin.storage
-      .from("product-images")
-      .createSignedUrl(img.image_path, 3600);
-    if (!signed?.signedUrl) continue;
+    let urlToSend = img.image_path;
+    if (
+      !img.image_path.startsWith("data:") &&
+      !img.image_path.startsWith("http://") &&
+      !img.image_path.startsWith("https://")
+    ) {
+      const { data: signed } = await supabaseAdmin.storage
+        .from("product-images")
+        .createSignedUrl(img.image_path, 3600);
+      if (signed?.signedUrl) {
+        urlToSend = signed.signedUrl;
+      }
+    }
+    if (!urlToSend) continue;
     try {
-      await sendMessengerImage(pageToken, senderId, signed.signedUrl);
+      await sendMessengerImage(pageToken, senderId, urlToSend);
       sent++;
     } catch (e) {
       console.error("[sendProductImagesForClient]", e);

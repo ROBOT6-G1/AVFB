@@ -21,6 +21,7 @@ import {
   upsertTraining,
   deleteTraining,
   addTrainingFile,
+  uploadTrainingFileServer,
   deleteTrainingFile,
   getTrainingFileUrl,
 } from "@/lib/trainings.functions";
@@ -31,6 +32,7 @@ import {
   Upload,
   FileVideo,
   FileText,
+  Image as ImageIcon,
   Link2,
   ExternalLink,
   GraduationCap,
@@ -268,44 +270,47 @@ function FormationsPage() {
 function FilesDialog({ training, onClose }: { training: any; onClose: () => void }) {
   const qc = useQueryClient();
   const [uploading, setUploading] = useState(false);
-  const [progress, setProgress] = useState(0);
   const fileRef = useRef<HTMLInputElement>(null);
   const [linkName, setLinkName] = useState("");
   const [linkUrl, setLinkUrl] = useState("");
 
   const upload = async (file: File) => {
     if (!training) return;
-    if (file.size > 500 * 1024 * 1024) {
-      toast.error("Fichier trop volumineux (max 500 Mo)");
+    if (file.size > 200 * 1024 * 1024) {
+      toast.error("Fichier trop volumineux (max 200 Mo)");
       return;
     }
     setUploading(true);
-    setProgress(0);
     try {
-      const { data: userData } = await supabase.auth.getUser();
-      const uid = userData.user?.id;
-      if (!uid) throw new Error("Non connecté");
-      const ext = file.name.split(".").pop() || "bin";
-      const path = `${uid}/${training.id}/${Date.now()}-${crypto.randomUUID()}.${ext}`;
-      const { error } = await supabase.storage.from("training-files").upload(path, file, {
-        upsert: false,
-        contentType: file.type || "application/octet-stream",
-      });
-      if (error) throw error;
+      const isImage = file.type.startsWith("image/");
       const isVideo = file.type.startsWith("video/");
       const isPdf = file.type === "application/pdf";
-      await addTrainingFile({
+      const fileType = isImage ? "image" : isVideo ? "video" : isPdf ? "pdf" : "document";
+
+      const base64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          const res = e.target?.result as string;
+          resolve(res.split(",")[1] || "");
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+
+      await uploadTrainingFileServer({
         data: {
           training_id: training.id,
-          file_path: path,
-          file_type: isVideo ? "video" : isPdf ? "pdf" : "document",
+          data_base64: base64,
+          content_type: file.type || "application/octet-stream",
+          file_type: fileType,
           file_name: file.name,
           size_bytes: file.size,
         },
       });
-      toast.success("Fichier ajouté");
+
+      toast.success("Fichier ajouté avec succès");
       qc.invalidateQueries({ queryKey: ["trainings"] });
-      setProgress(100);
+      if (fileRef.current) fileRef.current.value = "";
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Erreur upload");
     } finally {
@@ -341,7 +346,9 @@ function FilesDialog({ training, onClose }: { training: any; onClose: () => void
 
   const openFile = async (path: string) => {
     const { url } = await getTrainingFileUrl({ data: { path } });
-    window.open(url, "_blank");
+    if (url) {
+      window.open(url, "_blank");
+    }
   };
 
   return (
@@ -351,7 +358,7 @@ function FilesDialog({ training, onClose }: { training: any; onClose: () => void
           <DialogTitle>Fichiers — {training?.name}</DialogTitle>
         </DialogHeader>
         <div className="space-y-4">
-          <div className="space-y-2">
+          <div className="space-y-2 max-h-72 overflow-y-auto">
             {(training?.training_files ?? []).map((f: any) => (
               <div
                 key={f.id}
@@ -361,6 +368,8 @@ function FilesDialog({ training, onClose }: { training: any; onClose: () => void
                   <FileVideo className="h-4 w-4 text-primary shrink-0" />
                 ) : f.file_type === "link" ? (
                   <Link2 className="h-4 w-4 text-primary shrink-0" />
+                ) : f.file_type === "image" ? (
+                  <ImageIcon className="h-4 w-4 text-primary shrink-0" />
                 ) : (
                   <FileText className="h-4 w-4 text-primary shrink-0" />
                 )}
@@ -370,7 +379,7 @@ function FilesDialog({ training, onClose }: { training: any; onClose: () => void
                     href={f.external_url}
                     target="_blank"
                     rel="noreferrer"
-                    className="text-xs text-primary"
+                    className="text-xs text-primary p-2"
                   >
                     <ExternalLink className="h-4 w-4" />
                   </a>
@@ -391,18 +400,18 @@ function FilesDialog({ training, onClose }: { training: any; onClose: () => void
 
           <div className="border-t pt-4 space-y-3">
             <div>
-              <Label>Uploader un fichier (vidéo max 500 Mo, PDF, Word)</Label>
+              <Label>Uploader un fichier (Images, PDF, Vidéos, Word)</Label>
               <Input
                 ref={fileRef}
                 type="file"
-                accept="video/*,.pdf,.doc,.docx,application/*"
+                accept="image/*,video/*,.pdf,.doc,.docx,application/*"
                 disabled={uploading}
                 onChange={(e) => e.target.files?.[0] && upload(e.target.files[0])}
               />
-              {uploading && <p className="text-xs text-muted-foreground mt-1">Upload en cours…</p>}
+              {uploading && <p className="text-xs text-primary font-medium mt-1">Upload en cours…</p>}
             </div>
             <div>
-              <Label>Ou ajouter un lien vidéo externe</Label>
+              <Label>Ou ajouter un lien externe (Drive, YouTube, etc.)</Label>
               <div className="flex gap-2">
                 <Input
                   placeholder="Nom"

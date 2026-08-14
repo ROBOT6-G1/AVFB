@@ -21,31 +21,33 @@ import {
 
 // Local storage files helper
 async function saveLocalFile(filename: string, base64: string): Promise<string> {
+  const mime = filename.endsWith(".png")
+    ? "image/png"
+    : filename.endsWith(".webp")
+      ? "image/webp"
+      : filename.endsWith(".gif")
+        ? "image/gif"
+        : filename.endsWith(".pdf")
+          ? "application/pdf"
+          : "image/jpeg";
+
   if (typeof window === "undefined") {
-    // Server-side: write directly to public/uploads
-    const fs = await import("fs");
-    const path = await import("path");
-    const UPLOAD_DIR = path.join(process.cwd(), "public", "uploads");
-    if (!fs.existsSync(UPLOAD_DIR)) {
-      fs.mkdirSync(UPLOAD_DIR, { recursive: true });
-    }
-    const safeName = filename.replace(/[^\w.\-]/g, "_");
-    const uniqueName = `${Date.now()}-${crypto.randomUUID()}-${safeName}`;
-    const filePath = path.join(UPLOAD_DIR, uniqueName);
-    fs.writeFileSync(filePath, Buffer.from(base64, "base64"));
-    return `/uploads/${uniqueName}`;
+    return `data:${mime};base64,${base64}`;
   } else {
-    // Client-side: call local upload API
-    const res = await fetch("/api/public/upload-local", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ filename, data_base64: base64 }),
-    });
-    if (!res.ok) {
-      throw new Error("Failed to upload local file");
+    try {
+      const res = await fetch("/api/public/upload-local", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ filename, data_base64: base64, content_type: mime }),
+      });
+      if (res.ok) {
+        const json = await res.json();
+        return json.signed_url || json.path || `data:${mime};base64,${base64}`;
+      }
+    } catch (e) {
+      console.warn("Client upload fallback:", e);
     }
-    const json = await res.json();
-    return json.path;
+    return `data:${mime};base64,${base64}`;
   }
 }
 
@@ -419,8 +421,11 @@ class StorageBuilder {
   }
 
   async createSignedUrl(pathStr: string, expires: number) {
-    // Stored locally as public path
-    const url = pathStr.startsWith("/") ? pathStr : `/uploads/${pathStr.split("/").pop()}`;
+    if (!pathStr) return { data: { signedUrl: "" }, error: null };
+    if (pathStr.startsWith("data:") || pathStr.startsWith("http://") || pathStr.startsWith("https://") || pathStr.startsWith("/")) {
+      return { data: { signedUrl: pathStr }, error: null };
+    }
+    const url = `/uploads/${pathStr.split("/").pop()}`;
     return { data: { signedUrl: url }, error: null };
   }
 

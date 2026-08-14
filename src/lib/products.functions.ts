@@ -16,16 +16,70 @@ export const listProducts = createServerFn({ method: "GET" })
         const imgs = p.product_images ?? [];
         const signed = await Promise.all(
           imgs.map(async (img: any) => {
-            const { data: s } = await context.supabase.storage
-              .from("product-images")
-              .createSignedUrl(img.image_path, 3600);
-            return { ...img, url: s?.signedUrl ?? "" };
+            if (!img.image_path) return { ...img, url: "" };
+            if (
+              img.image_path.startsWith("data:") ||
+              img.image_path.startsWith("http://") ||
+              img.image_path.startsWith("https://")
+            ) {
+              return { ...img, url: img.image_path };
+            }
+            try {
+              const { data: s } = await context.supabase.storage
+                .from("product-images")
+                .createSignedUrl(img.image_path, 3600);
+              return { ...img, url: s?.signedUrl || img.image_path };
+            } catch {
+              return { ...img, url: img.image_path };
+            }
           }),
         );
         return { ...p, product_images: signed };
       }),
     );
     return withUrls;
+  });
+
+const uploadImageSchema = z.object({
+  product_id: z.string().uuid(),
+  data_base64: z.string().min(1),
+  content_type: z.string().default("image/jpeg"),
+  filename: z.string().optional(),
+  sort_order: z.number().int().default(0),
+});
+
+export const uploadProductImageServer = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d: unknown) => uploadImageSchema.parse(d))
+  .handler(async ({ data, context }) => {
+    const safeName = (data.filename || "image.jpg").replace(/[^\w.-]/g, "_");
+    const uniqueName = `${context.userId}/${data.product_id}/${Date.now()}-${crypto.randomUUID()}-${safeName}`;
+    const contentType = data.content_type || "image/jpeg";
+    const bytes = Uint8Array.from(atob(data.data_base64), (c) => c.charCodeAt(0));
+
+    let finalPath = `data:${contentType};base64,${data.data_base64}`;
+
+    try {
+      const { error: upErr } = await context.supabase.storage
+        .from("product-images")
+        .upload(uniqueName, bytes, { contentType, upsert: true });
+
+      if (!upErr) {
+        finalPath = uniqueName;
+      }
+    } catch (e) {
+      console.warn("[uploadProductImageServer] storage upload fallback to data url:", e);
+    }
+
+    const { error: insErr } = await context.supabase.from("product_images").insert({
+      product_id: data.product_id,
+      image_path: finalPath,
+      sort_order: data.sort_order,
+      user_id: context.userId,
+    });
+    if (insErr) throw new Error(insErr.message);
+
+    return { ok: true, image_path: finalPath };
   });
 
 const upsertSchema = z.object({

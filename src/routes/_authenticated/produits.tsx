@@ -20,7 +20,7 @@ import {
   listProducts,
   upsertProduct,
   deleteProduct,
-  addProductImage,
+  uploadProductImageServer,
   deleteProductImage,
 } from "@/lib/products.functions";
 import { Plus, Trash2, Edit, Image as ImageIcon, ShoppingBag, X } from "lucide-react";
@@ -228,6 +228,55 @@ function ProduitsPage() {
   );
 }
 
+async function compressProductImage(
+  file: File,
+): Promise<{ data_base64: string; content_type: string; filename: string }> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement("canvas");
+        let { width, height } = img;
+        const maxDim = 1200;
+        if (width > maxDim || height > maxDim) {
+          if (width > height) {
+            height = Math.round((height * maxDim) / width);
+            width = maxDim;
+          } else {
+            width = Math.round((width * maxDim) / height);
+            height = maxDim;
+          }
+        }
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) {
+          reject(new Error("Canvas context failed"));
+          return;
+        }
+        ctx.drawImage(img, 0, 0, width, height);
+        let quality = 0.75;
+        let dataUrl = canvas.toDataURL("image/jpeg", quality);
+        while (dataUrl.length * 0.75 > 100 * 1024 && quality > 0.2) {
+          quality -= 0.1;
+          dataUrl = canvas.toDataURL("image/jpeg", quality);
+        }
+        const base64 = dataUrl.split(",")[1] || "";
+        resolve({
+          data_base64: base64,
+          content_type: "image/jpeg",
+          filename: file.name.replace(/\.[^/.]+$/, "") + ".jpg",
+        });
+      };
+      img.onerror = reject;
+      img.src = event.target?.result as string;
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
 function GalleryDialog({ product, onClose }: { product: any; onClose: () => void }) {
   const qc = useQueryClient();
   const [uploading, setUploading] = useState(false);
@@ -242,25 +291,24 @@ function GalleryDialog({ product, onClose }: { product: any; onClose: () => void
     }
     setUploading(true);
     try {
-      const { data: userData } = await supabase.auth.getUser();
-      const uid = userData.user?.id;
-      if (!uid) throw new Error("Non connecté");
-      for (const file of Array.from(files)) {
-        const ext = file.name.split(".").pop() || "jpg";
-        const path = `${uid}/${product.id}/${Date.now()}-${crypto.randomUUID()}.${ext}`;
-        const { error } = await supabase.storage.from("product-images").upload(path, file, {
-          upsert: false,
-          contentType: file.type || "image/jpeg",
-        });
-        if (error) throw error;
-        await addProductImage({
-          data: { product_id: product.id, image_path: path, sort_order: count },
+      const fileList = Array.from(files);
+      for (let i = 0; i < fileList.length; i++) {
+        const file = fileList[i];
+        const compressed = await compressProductImage(file);
+        await uploadProductImageServer({
+          data: {
+            product_id: product.id,
+            data_base64: compressed.data_base64,
+            content_type: compressed.content_type,
+            filename: compressed.filename,
+            sort_order: count + i,
+          },
         });
       }
-      toast.success("Images ajoutées");
+      toast.success("Images ajoutées avec succès");
       qc.invalidateQueries({ queryKey: ["products"] });
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Erreur");
+      toast.error(e instanceof Error ? e.message : "Erreur upload");
     } finally {
       setUploading(false);
     }
@@ -286,7 +334,11 @@ function GalleryDialog({ product, onClose }: { product: any; onClose: () => void
                 key={img.id}
                 className="relative aspect-square bg-muted rounded overflow-hidden group"
               >
-                <img src={img.url} alt="" className="w-full h-full object-cover" />
+                <img
+                  src={img.url || img.image_path}
+                  alt=""
+                  className="w-full h-full object-cover"
+                />
                 <button
                   className="absolute top-1 right-1 bg-destructive text-destructive-foreground rounded p-1 opacity-0 group-hover:opacity-100 transition"
                   onClick={() => removeImg(img.id)}
@@ -303,8 +355,16 @@ function GalleryDialog({ product, onClose }: { product: any; onClose: () => void
               accept="image/*"
               multiple
               disabled={uploading}
-              onChange={(e) => e.target.files && uploadFiles(e.target.files)}
+              onChange={(e) => {
+                if (e.target.files && e.target.files.length > 0) {
+                  uploadFiles(e.target.files);
+                  e.target.value = "";
+                }
+              }}
             />
+            {uploading && (
+              <p className="text-xs text-primary font-medium mt-1">Upload en cours…</p>
+            )}
             <p className="text-xs text-muted-foreground mt-1">
               L'IA enverra 4 images à la fois au client, puis 4 autres à sa demande.
             </p>
