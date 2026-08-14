@@ -33,6 +33,13 @@ function stripDataUrl(dataUrl: string): { mime: string; base64: string } | null 
 async function downloadStorageImage(
   path: string,
 ): Promise<{ mime: string; base64: string; bytes: Uint8Array }> {
+  if (path.startsWith("data:image/")) {
+    const parsed = stripDataUrl(path);
+    if (parsed) {
+      const bytes = Uint8Array.from(atob(parsed.base64), (c) => c.charCodeAt(0));
+      return { mime: parsed.mime, base64: parsed.base64, bytes };
+    }
+  }
   const { data, error } = await supabaseAdmin.storage.from("post-images").download(path);
   if (error || !data) throw new Error(`Sary tsy azo alaina: ${error?.message ?? "unknown"}`);
   const buf = new Uint8Array(await data.arrayBuffer());
@@ -342,13 +349,24 @@ export async function runScheduledPost(
     } else {
       const imageUrls: string[] = [];
       for (const p of publishPaths) {
-        const { data: signed, error: sErr } = await supabaseAdmin.storage
-          .from("post-images")
-          .createSignedUrl(p, 60 * 60);
-        if (sErr || !signed?.signedUrl) {
-          throw new Error(`Image URL indisponible: ${sErr?.message ?? "unknown"}`);
+        if (p.startsWith("data:image/")) {
+          const parsed = stripDataUrl(p);
+          if (parsed) {
+            const bin = Uint8Array.from(atob(parsed.base64), (c) => c.charCodeAt(0));
+            const outPath = `${post.user_id}/${Date.now()}-${crypto.randomUUID()}.jpg`;
+            await supabaseAdmin.storage.from("post-images").upload(outPath, bin, { contentType: parsed.mime, upsert: true });
+            const { data: s } = await supabaseAdmin.storage.from("post-images").createSignedUrl(outPath, 60 * 60);
+            if (s?.signedUrl) imageUrls.push(s.signedUrl);
+          }
+        } else {
+          const { data: signed, error: sErr } = await supabaseAdmin.storage
+            .from("post-images")
+            .createSignedUrl(p, 60 * 60);
+          if (sErr || !signed?.signedUrl) {
+            throw new Error(`Image URL indisponible: ${sErr?.message ?? "unknown"}`);
+          }
+          imageUrls.push(signed.signedUrl);
         }
-        imageUrls.push(signed.signedUrl);
       }
       const r = await publishToFacebook({
         pageAccessToken: pageRow.page_access_token,

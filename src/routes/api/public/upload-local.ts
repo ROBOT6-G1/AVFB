@@ -1,6 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import fs from "fs";
-import path from "path";
+import { supabaseAdmin } from "@/integrations/supabase/client.server";
 
 export const Route = createFileRoute("/api/public/upload-local")({
   server: {
@@ -19,20 +18,33 @@ export const Route = createFileRoute("/api/public/upload-local")({
             });
           }
 
-          const UPLOAD_DIR = path.join(process.cwd(), "public", "uploads");
-          if (!fs.existsSync(UPLOAD_DIR)) {
-            fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+          const safeName = body.filename.replace(/[^\w.-]/g, "_");
+          const uniqueName = `uploads/${Date.now()}-${crypto.randomUUID()}-${safeName}`;
+          const contentType = body.content_type || "image/jpeg";
+          const bytes = Uint8Array.from(atob(body.data_base64), (c) => c.charCodeAt(0));
+
+          try {
+            const { error: upErr } = await supabaseAdmin.storage
+              .from("post-images")
+              .upload(uniqueName, bytes, { contentType, upsert: true });
+
+            if (!upErr) {
+              const { data: signed } = await supabaseAdmin.storage
+                .from("post-images")
+                .createSignedUrl(uniqueName, 60 * 60 * 24 * 7);
+
+              const signedUrl = signed?.signedUrl || `data:${contentType};base64,${body.data_base64}`;
+              return new Response(JSON.stringify({ path: uniqueName, signed_url: signedUrl }), {
+                headers: { "content-type": "application/json" },
+              });
+            }
+          } catch (storageErr) {
+            console.warn("[upload-local] storage upload fallback:", storageErr);
           }
 
-          const safeName = body.filename.replace(/[^\w.\-]/g, "_");
-          const uniqueName = `${Date.now()}-${crypto.randomUUID()}-${safeName}`;
-          const filePath = path.join(UPLOAD_DIR, uniqueName);
-
-          const bytes = Uint8Array.from(atob(body.data_base64), (c) => c.charCodeAt(0));
-          fs.writeFileSync(filePath, bytes);
-
-          const publicUrl = `/uploads/${uniqueName}`;
-          return new Response(JSON.stringify({ path: publicUrl, signed_url: publicUrl }), {
+          // Fallback to data URL
+          const dataUrl = `data:${contentType};base64,${body.data_base64}`;
+          return new Response(JSON.stringify({ path: dataUrl, signed_url: dataUrl }), {
             headers: { "content-type": "application/json" },
           });
         } catch (e) {
@@ -49,3 +61,4 @@ export const Route = createFileRoute("/api/public/upload-local")({
     },
   },
 });
+

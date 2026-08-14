@@ -180,15 +180,27 @@ function AutoPostPage() {
           continue;
         }
         const compressed = await compressImageToUnder50KB(file);
-        const res = await uploadPostImage({ data: compressed });
+        let path = `data:${compressed.content_type};base64,${compressed.data_base64}`;
+        let preview = path;
+
+        try {
+          const res = await uploadPostImage({ data: compressed });
+          if (res?.path) {
+            path = res.path;
+            preview = res.signed_url || preview;
+          }
+        } catch (storageErr) {
+          console.warn("Storage upload fallback to base64:", storageErr);
+        }
+
         setForm((f) => ({
           ...f,
-          images: [...f.images, { path: res.path, preview: res.signed_url }],
+          images: [...f.images, { path, preview }],
           video_path: null,
           video_preview: null,
         }));
       }
-      toast.success("Sary voatsindry sy voatahiry (< 50Ko)");
+      toast.success("Sary voatahiry soa aman-tsara");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Erreur upload");
     } finally {
