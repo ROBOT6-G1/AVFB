@@ -1,0 +1,14 @@
+{
+  "name": "Assistante Virtuelle IA",
+  "short_name": "AV IA",
+  "description": "Assistante IA pour Facebook Messenger et commentaires.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0F172A",
+  "theme_color": "#4F46E5",
+  "icons": [
+    { "src": "/favicon.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/favicon.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

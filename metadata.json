@@ -1,0 +1,6 @@
+{
+  "name": "Agence Virtuelle",
+  "description": "Une application de gestion d'agence virtuelle avec intégration Facebook et automatisation.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
