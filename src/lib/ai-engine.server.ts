@@ -61,7 +61,7 @@ function getTextFromParts(parts: AiPart[]): string {
 }
 
 function appendClarityInstructions(systemPrompt: string): string {
-  return `${systemPrompt}\n\nDIRECTIVES DE PERTINENCE ET CLARTÉ :\n- Réponds DIRECTEMENT et PRÉCISÉMENT à la question du client sans verbiage inutile.\n- Reste concis, clair, naturel et chaleureux.\n- Interdiction absolue d'afficher des réflexions, analyses, brouillons ou balises 'Thinking'.`;
+  return `${systemPrompt}\n\nDIRECTIVES STRICTES DE RÉPONSE :\n- Réponds DIRECTEMENT et PRÉCISÉMENT à la question du client sans verbiage inutile.\n- Reste concis, clair, naturel et chaleureux.\n- Interdiction absolue d'afficher des réflexions, analyses, brouillons, balises 'Thinking' ou du texte en anglais.\n- Ne demande les informations de commande qu'UNE SEULE FOIS par étape après que le client a expressément confirmé vouloir acheter.`;
 }
 
 function looksTruncated(text: string): boolean {
@@ -294,7 +294,11 @@ export function sanitizeAiResponse(text: string): string {
     const lower = p.trim().toLowerCase();
     if (
       lower.startsWith("thinking:") ||
+      lower.startsWith("*thinking*") ||
+      lower.startsWith("**thinking") ||
       lower.startsWith("thought:") ||
+      lower.startsWith("*thought") ||
+      lower.startsWith("**thought") ||
       lower.startsWith("thoughts:") ||
       lower.startsWith("analyse:") ||
       lower.startsWith("analysis:") ||
@@ -353,7 +357,9 @@ export function sanitizeAiResponse(text: string): string {
     const low = l.toLowerCase();
 
     if (
-      /^(?:thinking|thought|thoughts|reasoning|analyse|analysis|penser|réflexion|reflexion)\s*:/i.test(low) ||
+      /^(?:\*|\*\*|\[)?(?:thinking|thought|thoughts|reasoning|analyse|analysis|penser|réflexion|reflexion)\s*(?::|\*|\*\*|\])?/i.test(
+        low,
+      ) ||
       low.startsWith("let me analyze") ||
       low.startsWith("let's analyze")
     ) {
@@ -364,7 +370,11 @@ export function sanitizeAiResponse(text: string): string {
     if (inThoughtBlock) {
       if (!l) continue;
       // Stop skipping if we hit a genuine Malagasy / French customer response opening
-      if (/^(salama|misaotra|bonjour|bonsoir|bjr|cc|coucou|hello|hi|manao ahoana|eny|tsia|oui|non|raha|ny|momba|mikasika|ireto|ity|io|izahay|afaka)\b/i.test(l)) {
+      if (
+        /^(salama|misaotra|bonjour|bonsoir|bjr|cc|coucou|hello|hi|manao ahoana|eny|tsia|oui|non|raha|ny|momba|mikasika|ireto|ity|io|izahay|afaka)\b/i.test(
+          l,
+        )
+      ) {
         inThoughtBlock = false;
       } else {
         continue;
@@ -381,6 +391,8 @@ export function sanitizeAiResponse(text: string): string {
       low.startsWith("benefit:") ||
       low.startsWith("trust:") ||
       low.startsWith("check:") ||
+      low.startsWith("*thinking*") ||
+      low.startsWith("**thinking**") ||
       low.includes("self-correction") ||
       low.includes("(text looks good") ||
       low === "check." ||
@@ -703,23 +715,29 @@ async function buildCatalogContext(userId: string): Promise<string> {
 
     const imageProtocol =
       "PROTOCOLE PHOTOS PRODUIT (OBLIGATOIRE) :\n" +
-      "Rehefa mangataka sarin'ny vokatra ny client (photos, sary, voir, images, aperçu), " +
+      "Rehefa mangataka sarin'ny vokatra ny client (photos, sary, voir, images, aperçu, asehoy), " +
       "ampidiro eo amin'ny faran'ny valin-teninao (amin'ny andalana manokana) ity bloc teknika ity :\n" +
       "[[SEND_IMAGES:NOM EXACT DU PRODUIT]]\n" +
-      "- Handefa sary 4 amin'io vokatra io avy hatrany ny rafitra.\n" +
+      "- Handefa sary 4 amin'io vokatra io avy hatrany ny rafitra ho an'ny mpanjifa.\n" +
       "- Raha mbola mangataka sary fanampiny amin'io vokatra io ihany izy, avereno ity bloc ity : halefa ireo 4 manaraka.\n" +
       "- Aza tononina na hazavaina amin'ny mpanjifa io bloc io fa miafina izy io.\n" +
       "- Bloc iray ihany isaky ny valin-teny.";
 
     const orderProtocol =
-      "PROTOCOLE COMMANDE TSIKILIKELY / ÉTAPE PAR ÉTAPE (STRICTEMENT OBLIGATOIRE) :\n" +
-      "Rehefa te hividy na hanao commande ny client dia ANONTANIO TSIKILIKELY ISAKY NY VALIN-TENY ireo fampahalalana ilaina (TSY AZO ANGATAHINA MIARAKA DAHOLO INDRAY MITORAKA, ary jereo tsara ny tantaran'ny resaka / historique mba tsy hamerenana fanontaniana efa voavaly) :\n" +
-      "• Dingana 1 : ANARANA FENO — Anontanio ny anarana fenon'ny mpanjifa (raha mbola tsy fantatra ao amin'ny resaka).\n" +
-      "• Dingana 2 : LAHARANA FINDAY — Rehefa azo ny anarana dia anontanio ny laharana finday afaka iantsoana azy na WhatsApp.\n" +
-      "• Dingana 3 : ADIRESY FENO MAZAVA — Rehefa azo ny laharana dia anontanio ny adiresy mazava misy azy (Faritra / Région, Distrika / District, Fokontany, ary toerana famantarana / repère).\n" +
-      "• Dingana 4 : FOMBA FANDOAVAM-BOLA SY FAMARANANA :\n" +
-      "   - Raha 'Paiement avant livraison / Par numéros' : Omeo ny laharana fandoavam-bola (Mvola, Airtel Money, Orange Money) ary angataho ny référence sy ny anaran'ny mpanefa. Rehefa azo izany dia ampidiro ny bloc ORDER.\n" +
-      "   - Raha 'Paiement à la livraison / Contact client' : Rehefa azo ireo 3 voalohany (Anarana, Laharana, Adiresy mazava) dia ampidiro AVY HATRANY ny bloc ORDER ary lazao amin'ny mpanjifa fa voaray soa aman-tsara ny commande-ny ary haterin'ny mpanao livraison aminy.\n\n" +
+      "PROTOCOLE EXPLICATION PRODUIT SY COMMANDE TSIKILIKELY (STRICTEMENT OBLIGATOIRE) :\n\n" +
+      "1. REHEFA MANAZAVA PRODUIT (TANDREMO TSY TONGA DIA MAMPISEHO PAIEMENT NA COMMANDE) :\n" +
+      "   - Hazavao amin'ny fomba tsotra sy mazava ny momba ilay vokatra (antsipiriany, tombontsoa, vidiny).\n" +
+      "   - Raha nangataka sary izy dia asio [[SEND_IMAGES:NOM EXACT DU PRODUIT]] any amin'ny farany.\n" +
+      "   - REHEFA VITA NY FANAZAVANA : ANONTANIO ALOHA NY FANAPAHAN-KEVITRY NY MPANJIFA (DÉCISION) : ohatra 'Mahaliana anao ve ity vokatra ity? Tianao ve ny hanafatra azy sa mbola misy fanazavana fanampiny tianao ho fantatra?'.\n" +
+      "   - TSY AZO OMENA LAHARANA FANDOAVAM-BOLA NA ANGATAHINA ADIRESY/COMMANDE NY MPANJIFA raha mbola tsy niteny mazava izy fa HANDRAY NA HIVIDY NA HANAFATRA.\n\n" +
+      "2. REHEFA NANAIKY HIVIDY NY MPANJIFA (FAKANA COMMANDE TSIKILIKELY ISAKY NY VALIN-TENY) :\n" +
+      "   Rehefa nilaza mazava ny mpanjifa fa hividy na handray (ohatra: 'Eny handray aho', 'Tiako hovidina', 'Commander-ko', 'Hanafatra aho'), anontanio TSIKILIKELY isaky ny hafatra ireto fampahalalana ireto (TSY AZO ANGATAHINA MIARAKA DAHOLO, ary jereo tsara ny resaka teo aloha mba tsy hamerenana fanontaniana efa voavaly) :\n" +
+      "   • Dingana 1 : ANARANA FENO — Anontanio ny anarana fenon'ny mpanjifa (raha mbola tsy voalaza).\n" +
+      "   • Dingana 2 : LAHARANA FINDAY — Rehefa azo ny anarana dia anontanio ny laharana finday afaka iantsoana azy na WhatsApp.\n" +
+      "   • Dingana 3 : ADIRESY FENO MAZAVA — Rehefa azo ny laharana dia anontanio ny adiresy mazava misy azy (Faritra / RÉGION, Distrika / DISTRICT, FOKONTANY, ary toerana famantarana / REPÈRE).\n" +
+      "   • Dingana 4 : FOMBA FANDOAVAM-BOLA SY FAMARANANA :\n" +
+      "      - Raha 'Paiement avant livraison / Par numéros' : Omeo ny laharana fandoavam-bola (Mvola, Airtel Money, Orange Money) ary angataho ny référence sy ny anaran'ny mpanefa. Rehefa azo izany dia ampidiro ny bloc ORDER.\n" +
+      "      - Raha 'Paiement à la livraison / Contact client' : Rehefa azo ireo 3 voalohany (Anarana, Laharana, Adiresy mazava) dia ampidiro AVY HATRANY ny bloc ORDER ary lazao amin'ny mpanjifa fa voaray soa aman-tsara ny commande-ny ary haterin'ny mpanao livraison aminy.\n\n" +
       "BLOC TECHNIQUE ORDER (ampidiro eo amin'ny farany indrindra amin'ny andalana manokana, rehefa feno ny fampahalalana) :\n" +
       `[[ORDER:{"type":"sales","product":"NOM EXACT DU PRODUIT","quantity":1,"client_fb_name":"ANARANA","client_phone":"LAHARANA","client_whatsapp":"WHATSAPP","client_address":"ADIRESY (REGION DISTRICT FOKONTANY REPERE)","payment_reference":"REFERENCE NA VIDE","notes":""}]]\n` +
       "- Tsy maintsy ampidirina ity bloc ORDER ity mba hiditra mivantana ao amin'ny pejy Commandes ny commande.\n" +
@@ -792,15 +810,16 @@ export async function buildSystemPrompt(
 
   const styleRules =
     "RÈGLES ABSOLUES ET STRICTES DE RÉPONSE (PRIORITÉ MAXIMALE) :\n" +
-    "1. RÉPONSE DIRECTE ET PRÉCISE : Réponds DIRECTEMENT à la question du client sans détour, sans préambule inutile et sans répéter la question du client.\n" +
-    "2. AUCUNE PENSÉE NI ANALYSE VISIBLE : INTERDICTION FORMELLE d'inclure ton processus de réflexion, brouillon, 'Thinking:', 'Thought:', 'Hook:', 'Check', 'Let me check', 'Analyse:' ou du texte en anglais. Donne UNIQUEMENT la réponse finale pour le client.\n" +
-    "3. LANGUE EXACTE DU CLIENT : Réponds STRICTEMENT dans la même langue que le client (en malgache si le client écrit en malgache, en français s'il écrit en français). N'utilise JAMAIS l'anglais.\n" +
-    "4. DEMANDE D'INFOS PROGRESSIVE (TSIKILIKELY) : Ne pose JAMAIS toutes les questions de commande d'un coup. Demande UNE information à la fois (1. Nom complet -> 2. Numéro -> 3. Adresse précise -> 4. Modalité de paiement). Ne redemande JAMAIS une info déjà fournie dans la discussion.\n" +
-    "5. PHOTOS DU PRODUIT : Si le client demande à voir ou demande des photos/sary du produit, ajoute [[SEND_IMAGES:NOM DU PRODUIT]] à la fin pour lui envoyer automatiquement les photos de la galerie.\n" +
-    "6. CONCIS ET PERTINENT : Si le client demande un prix, une modalité ou un renseignement précis, réponds UNIQUEMENT sur cet élément précis sans étaler tout le catalogue ni ajouter de longs textes hors-sujet.\n" +
-    "7. TON NATUREL ET CHALEUREUX : Ton poli, accueillant, bienveillant et professionnel comme un vrai conseiller humain.\n" +
-    "8. FORMAT PROPRE : Phrases courtes, saut de ligne entre les idées pour un texte facile à lire. N'utilise JAMAIS de markdown (* ou #).\n" +
-    "9. HISTORIQUE : Tiens compte des échanges précédents dans la conversation pour ne pas reposer les mêmes questions.";
+    "1. MPANJIFA VAOVAO / FIARAHABANA : Rehefa mpanjifa vao manomboka miresaka na manao salama / bonjour / manao ahoana, miarahaba am-pifaliana sy am-panajana, mampahafantatra fohy ireo vokatra misy ao amin'ny pejy, ary manontany hoe inona amin'ireo no tiany ho fantatra kokoa.\n" +
+    "2. RÉPONSE DIRECTE ET PRÉCISE : Réponds DIRECTEMENT à la question du client sans détour, sans préambule inutile et sans répéter la question du client.\n" +
+    "3. AUCUNE PENSÉE NI ANALYSE VISIBLE : INTERDICTION FORMELLE d'inclure ton processus de réflexion, brouillon, 'Thinking:', 'Thought:', 'Hook:', 'Check', 'Let me check', 'Analyse:' ou du texte en anglais. Donne UNIQUEMENT la réponse finale pour le client.\n" +
+    "4. LANGUE EXACTE DU CLIENT : Réponds STRICTEMENT dans la même langue que le client (en malgache si le client écrit en malgache, en français s'il écrit en français). N'utilise JAMAIS l'anglais.\n" +
+    "5. EXPLICATION PUIS DÉCISION : Rehefa manazava produit dia hazavao ny momba azy sy ny vidiny, ary ANONTANIO ALOHA NY DÉCISION-NY ('Mahaliana anao ve? Tianao ve ny hanafatra azy?'). Aza mbola manome laharana fandoavam-bola na maka adiresy raha tsy manaiky mazava hividy izy.\n" +
+    "6. DEMANDE D'INFOS PROGRESSIVE (TSIKILIKELY) : Rehefa nanaiky hividy izy vao maka commande tsikelikely (1. Nom complet -> 2. Numéro -> 3. Adresse Région/District/Fokontany/Repère -> 4. Paiement). Ne pose JAMAIS toutes les questions d'un coup.\n" +
+    "7. PHOTOS DU PRODUIT : Si le client demande à voir ou demande des photos/sary du produit, ajoute [[SEND_IMAGES:NOM DU PRODUIT]] à la fin pour lui envoyer automatiquement les photos de la galerie.\n" +
+    "8. TON NATUREL ET CHALEUREUX : Ton poli, accueillant, bienveillant et professionnel comme un vrai conseiller humain.\n" +
+    "9. FORMAT PROPRE : Phrases courtes, saut de ligne entre les idées pour un texte facile à lire. N'utilise JAMAIS de markdown (* ou #).\n" +
+    "10. HISTORIQUE : Tiens compte des échanges précédents dans la conversation pour ne pas reposer les mêmes questions.";
 
   const catalog = await buildCatalogContext(userId);
 
@@ -949,34 +968,82 @@ export async function sendMessengerReply(pageToken: string, recipientId: string,
   }
 }
 
-/** Send a single image attachment via Messenger. Supports both URL and data URLs. */
+/** Send a single image attachment via Messenger. Supports Data URLs, local file paths, and remote URLs with binary multipart upload. */
 async function sendMessengerImage(pageToken: string, recipientId: string, url: string) {
-  if (url.startsWith("data:image/")) {
+  let blob: Blob | null = null;
+  let filename = "image.jpg";
+  let mimeType = "image/jpeg";
+
+  if (url.startsWith("data:image/") || url.startsWith("data:application/")) {
     const parsed = stripDataUrl(url);
     if (parsed) {
       const bytes = Uint8Array.from(atob(parsed.base64), (c) => c.charCodeAt(0));
-      const blob = new Blob([bytes], { type: parsed.mime });
-      const form = new FormData();
-      form.append("recipient", JSON.stringify({ id: recipientId }));
-      form.append("message", JSON.stringify({ attachment: { type: "image", payload: {} } }));
-      form.append("filedata", blob, "image.jpg");
-      form.append("messaging_type", "RESPONSE");
-
-      const res = await fetch(
-        `https://graph.facebook.com/v21.0/me/messages?access_token=${pageToken}`,
-        {
-          method: "POST",
-          body: form,
-        },
-      );
-      if (!res.ok)
-        throw new Error(
-          `Messenger image upload ${res.status}: ${(await res.text()).slice(0, 200)}`,
-        );
-      return;
+      mimeType = parsed.mime || "image/jpeg";
+      blob = new Blob([bytes], { type: mimeType });
+      filename = mimeType.includes("png") ? "image.png" : mimeType.includes("webp") ? "image.webp" : "image.jpg";
+    }
+  } else if (url.startsWith("/") || url.startsWith("public/") || url.startsWith("uploads/")) {
+    try {
+      const fs = await import("fs");
+      const path = await import("path");
+      const cleanPath = url.replace(/^\/+/, "");
+      const possiblePaths = [
+        path.join(process.cwd(), "public", cleanPath.replace(/^public\//, "")),
+        path.join(process.cwd(), cleanPath),
+        path.join(process.cwd(), "public", "uploads", path.basename(url)),
+      ];
+      for (const p of possiblePaths) {
+        if (fs.existsSync(p)) {
+          const buf = fs.readFileSync(p);
+          const ext = path.extname(p).toLowerCase();
+          mimeType = ext === ".png" ? "image/png" : ext === ".webp" ? "image/webp" : "image/jpeg";
+          blob = new Blob([buf], { type: mimeType });
+          filename = path.basename(p);
+          break;
+        }
+      }
+    } catch (e) {
+      console.warn("[sendMessengerImage] fs read failed:", e);
+    }
+  } else if (url.startsWith("http://") || url.startsWith("https://")) {
+    try {
+      const r = await fetch(url);
+      if (r.ok) {
+        const ct = r.headers.get("content-type") || "image/jpeg";
+        const buf = await r.arrayBuffer();
+        blob = new Blob([buf], { type: ct });
+        mimeType = ct;
+        filename = ct.includes("png") ? "image.png" : "image.jpg";
+      }
+    } catch (e) {
+      console.warn("[sendMessengerImage] download remote image failed, fallback to url payload:", e);
     }
   }
 
+  // 1. Direct Binary / Multipart upload (most reliable on Facebook Messenger)
+  if (blob) {
+    const form = new FormData();
+    form.append("recipient", JSON.stringify({ id: recipientId }));
+    form.append("message", JSON.stringify({ attachment: { type: "image", payload: { is_reusable: false } } }));
+    form.append("filedata", blob, filename);
+    form.append("messaging_type", "RESPONSE");
+
+    const res = await fetch(
+      `https://graph.facebook.com/v21.0/me/messages?access_token=${pageToken}`,
+      {
+        method: "POST",
+        body: form,
+      },
+    );
+    if (!res.ok) {
+      const errText = await res.text();
+      console.error(`[sendMessengerImage] multipart upload failed: ${res.status} - ${errText}`);
+      throw new Error(`Messenger image upload ${res.status}: ${errText.slice(0, 200)}`);
+    }
+    return;
+  }
+
+  // 2. URL Payload fallback
   const res = await fetch(
     `https://graph.facebook.com/v21.0/me/messages?access_token=${pageToken}`,
     {
@@ -1025,7 +1092,7 @@ export function extractAiActions(text: string): {
   const imageRequests: string[] = [];
   let cleaned = text;
 
-  cleaned = cleaned.replace(/\[\[ORDER:\s*(\{[\s\S]*?\})\s*\]\]/gi, (_, json) => {
+  cleaned = cleaned.replace(/\[\[?\s*ORDER:\s*(\{[\s\S]*?\})\s*\]\]?/gi, (_, json) => {
     try {
       orders.push(JSON.parse(json));
     } catch (e) {
@@ -1035,15 +1102,16 @@ export function extractAiActions(text: string): {
   });
 
   cleaned = cleaned.replace(
-    /\[\[\s*(?:SEND_?IMAGES?|SEND_?PHOTOS?|IMAGES?|PHOTOS?|SARY|VOIR_?IMAGES?)(?::\s*([^\]\n]*?))?\s*\]\]/gi,
+    /\[\[?\s*(?:SEND_?IMAGES?|SEND_?PHOTOS?|IMAGES?|PHOTOS?|SARY|VOIR_?IMAGES?)(?::\s*([^\]\n]*?))?\s*\]\]?/gi,
     (_, name) => {
       imageRequests.push(String(name || "").trim());
       return "";
     },
   );
 
-  // Remove any remaining internal brackets
+  // Remove any remaining internal brackets or technical strings
   cleaned = cleaned.replace(/\[\[[\s\S]*?\]\]/g, "");
+  cleaned = cleaned.replace(/\[(?:SEND_?IMAGES?|SEND_?PHOTOS?|ORDER)[^\]]*\]/gi, "");
 
   cleaned = cleaned.replace(/\n{3,}/g, "\n\n").trim();
   return { cleanText: cleaned, orders, imageRequests };
@@ -1199,6 +1267,8 @@ async function sendProductImagesForClient(
         },
         "image-sent",
       );
+      // Small pause between individual photo sends
+      await new Promise((r) => setTimeout(r, 250));
     } catch (e) {
       console.error("[sendProductImagesForClient]", e);
     }
@@ -1218,7 +1288,7 @@ async function sendProductImagesForClient(
   return { sent, note: `batch:${sent}/${images.length - offset}` };
 }
 
-/** Process AI actions extracted from a Messenger reply, then return the cleaned text. */
+/** Process AI actions extracted from a Messenger reply, send standalone images first, then return the cleaned text. */
 export async function processAiActionsForMessenger(opts: {
   userId: string;
   pageId: string;
@@ -1226,16 +1296,32 @@ export async function processAiActionsForMessenger(opts: {
   senderId: string;
   senderName: string | null;
   rawReply: string;
-}): Promise<string> {
+  userMessageText?: string;
+}): Promise<{ cleanText: string; totalImagesSent: number }> {
   const { cleanText, orders, imageRequests } = extractAiActions(opts.rawReply);
 
+  // If user explicitly asked for photos and AI didn't output tag, auto-send images
+  if (
+    imageRequests.length === 0 &&
+    opts.userMessageText &&
+    /\b(sary|sarin|photo|photos|image|images|asehoy|ataovy sary|jereo|voir|aperçu)\b/i.test(opts.userMessageText)
+  ) {
+    imageRequests.push("");
+  }
+
+  // 1. Persist orders
   for (const o of orders) {
     await persistAiOrder(opts.userId, opts.pageId, opts.senderId, opts.senderName, o);
   }
+
+  // 2. Send images standalone FIRST before any text reply
+  let totalImagesSent = 0;
   for (const name of imageRequests) {
-    await sendProductImagesForClient(opts.userId, opts.pageId, opts.pageToken, opts.senderId, name);
+    const res = await sendProductImagesForClient(opts.userId, opts.pageId, opts.pageToken, opts.senderId, name);
+    totalImagesSent += res.sent;
   }
-  return cleanText;
+
+  return { cleanText, totalImagesSent };
 }
 
 /** Reply to a comment publicly. */
@@ -1371,27 +1457,36 @@ async function handleMessengerEvent(page: any, ev: any) {
       allowLinks: true,
     });
     const rawReply = reply || "Misaotra tamin'ny hafatrao. Handray anao tsy ho ela izahay.";
-    const finalReply = await processAiActionsForMessenger({
+    const { cleanText, totalImagesSent } = await processAiActionsForMessenger({
       userId: page.user_id,
       pageId: page.page_id,
       pageToken: page.page_access_token,
       senderId,
       senderName: null,
       rawReply,
+      userMessageText: text,
     });
-    if (finalReply) await sendMessengerReply(page.page_access_token, senderId, finalReply);
-    await insertMessageLog(
-      {
-        user_id: page.user_id,
-        page_id: page.page_id,
-        sender_id: senderId,
-        content: finalReply,
-        ai_response: finalReply,
-        direction: OUTGOING_DIRECTION,
-        status: `sent:${provider}`,
-      },
-      "outgoing-webhook",
-    );
+
+    if (totalImagesSent > 0) {
+      // Pause so that photos arrive in Messenger first before the explanation text
+      await new Promise((r) => setTimeout(r, 600));
+    }
+
+    if (cleanText) {
+      await sendMessengerReply(page.page_access_token, senderId, cleanText);
+      await insertMessageLog(
+        {
+          user_id: page.user_id,
+          page_id: page.page_id,
+          sender_id: senderId,
+          content: cleanText,
+          ai_response: cleanText,
+          direction: OUTGOING_DIRECTION,
+          status: `sent:${provider}`,
+        },
+        "outgoing-webhook",
+      );
+    }
   } catch (e) {
     console.error("[messenger reply]", e);
     await insertMessageLog(
