@@ -694,7 +694,7 @@ async function buildCatalogContext(userId: string): Promise<string> {
   if (type === "sales") {
     const { data: products } = await supabaseAdmin
       .from("products")
-      .select("name,price,stock,description,payment_flow")
+      .select("id,name,price,stock,description,payment_flow, product_images(id, image_path, sort_order)")
       .eq("user_id", userId)
       .eq("is_active", true);
     const { data: pmethods } = await supabaseAdmin
@@ -704,24 +704,23 @@ async function buildCatalogContext(userId: string): Promise<string> {
       .eq("is_active", true);
     if (!products || products.length === 0) return "";
     const list = products
-      .map(
-        (p: any) =>
-          `• ${p.name} — ${Number(p.price).toLocaleString()} Ar (stock : ${p.stock})\n   ${p.description ?? ""}`,
-      )
-      .join("\n");
+      .map((p: any) => {
+        const imgs = (p.product_images ?? []).sort((a: any, b: any) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
+        const imgStrs = imgs.map((img: any) => `   - Sary [ID_IMAGE: ${img.id}]`).join("\n");
+        return `• [ID_PRODUIT: ${p.id}] ${p.name} — ${Number(p.price).toLocaleString()} Ar (stock : ${p.stock})\n   ${p.description ?? ""}\n${imgStrs}`;
+      })
+      .join("\n\n");
     const pm = (pmethods ?? [])
       .map((p: any) => `- ${p.label} : ${p.number}${p.instructions ? ` (${p.instructions})` : ""}`)
       .join("\n");
 
     const imageProtocol =
-      "PROTOCOLE PHOTOS PRODUIT (OBLIGATOIRE) :\n" +
-      "Rehefa mangataka sarin'ny vokatra ny client (photos, sary, voir, images, aperçu, asehoy), " +
-      "ampidiro eo amin'ny faran'ny valin-teninao (amin'ny andalana manokana) ity bloc teknika ity :\n" +
-      "[[SEND_IMAGES:NOM EXACT DU PRODUIT]]\n" +
-      "- Handefa sary 4 amin'io vokatra io avy hatrany ny rafitra ho an'ny mpanjifa.\n" +
-      "- Raha mbola mangataka sary fanampiny amin'io vokatra io ihany izy, avereno ity bloc ity : halefa ireo 4 manaraka.\n" +
-      "- Aza tononina na hazavaina amin'ny mpanjifa io bloc io fa miafina izy io.\n" +
-      "- Bloc iray ihany isaky ny valin-teny.";
+      "PROTOCOLE PHOTOS PRODUIT AVEC ID (OBLIGATOIRE) :\n" +
+      "Rehefa mangataka sary ny client (photos, sary, voir, images, aperçu, asehoy), " +
+      "jereo ao amin'ny katalaogy eo ambony ny ID an'ilay sary ([ID_IMAGE: ...]) na ny anaran'ny vokatra, ary ampidiro any amin'ny farany (amin'ny andalana manokana) ny bloc teknika :\n" +
+      "[[SEND_IMAGE_ID: ID_DE_LA_SARY]] na [[SEND_IMAGES: NOM_OU_ID_DU_PRODUIT]]\n" +
+      "- Handefa mivantana ilay sary voatondro ny rafitra.\n" +
+      "- Aza tononina na hazavaina amin'ny mpanjifa io bloc io fa miafina izy io.";
 
     const orderProtocol =
       "PROTOCOLE EXPLICATION PRODUIT SY COMMANDE TSIKILIKELY (STRICTEMENT OBLIGATOIRE) :\n\n" +
@@ -1102,7 +1101,7 @@ export function extractAiActions(text: string): {
   });
 
   cleaned = cleaned.replace(
-    /\[\[?\s*(?:SEND_?IMAGES?|SEND_?PHOTOS?|IMAGES?|PHOTOS?|SARY|VOIR_?IMAGES?)(?::\s*([^\]\n]*?))?\s*\]\]?/gi,
+    /\[\[?\s*(?:SEND_?IMAGE_?ID|IMAGE_?ID|SEND_?IMAGE|SEND_?IMAGES?|SEND_?PHOTOS?|IMAGES?|PHOTOS?|SARY|VOIR_?IMAGES?)(?::\s*([^\]\n]*?))?\s*\]\]?/gi,
     (_, name) => {
       imageRequests.push(String(name || "").trim());
       return "";
@@ -1111,7 +1110,7 @@ export function extractAiActions(text: string): {
 
   // Remove any remaining internal brackets or technical strings
   cleaned = cleaned.replace(/\[\[[\s\S]*?\]\]/g, "");
-  cleaned = cleaned.replace(/\[(?:SEND_?IMAGES?|SEND_?PHOTOS?|ORDER)[^\]]*\]/gi, "");
+  cleaned = cleaned.replace(/\[(?:SEND_?IMAGE_?ID|SEND_?IMAGES?|SEND_?PHOTOS?|ORDER)[^\]]*\]/gi, "");
 
   cleaned = cleaned.replace(/\n{3,}/g, "\n\n").trim();
   return { cleanText: cleaned, orders, imageRequests };
@@ -1182,27 +1181,70 @@ async function persistAiOrder(
   }
 }
 
-/** Send the next batch of 4 product photos for a client. */
+/** Send product photos or specific image by ID for a client. */
 async function sendProductImagesForClient(
   userId: string,
   pageId: string,
   pageToken: string,
   senderId: string,
-  productNameFromAi: string,
+  queryParam: string,
 ): Promise<{ sent: number; note: string }> {
+  const cleanParam = (queryParam || "").trim();
+  const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(cleanParam);
+
+  // 1. If queryParam is a specific Image ID (UUID)
+  if (isUuid) {
+    const { data: imgRow } = await supabaseAdmin
+      .from("product_images")
+      .select("id, image_path, product_id, products(name)")
+      .eq("id", cleanParam)
+      .maybeSingle();
+
+    if (imgRow) {
+      let urlToSend = imgRow.image_path;
+      if (!urlToSend.startsWith("data:") && !urlToSend.startsWith("http://") && !urlToSend.startsWith("https://")) {
+        const { data: pub } = supabaseAdmin.storage.from("product-images").getPublicUrl(urlToSend);
+        urlToSend = pub?.publicUrl || urlToSend;
+      }
+      if (urlToSend) {
+        try {
+          await sendMessengerImage(pageToken, senderId, urlToSend);
+          const productName = (imgRow as any).products?.name || "Produit";
+          await insertMessageLog(
+            {
+              user_id: userId,
+              page_id: pageId,
+              sender_id: senderId,
+              content: `[Sary : ${productName}]`,
+              media_type: "image",
+              media_url: urlToSend,
+              direction: OUTGOING_DIRECTION,
+              status: "sent",
+            },
+            "image-sent",
+          );
+          return { sent: 1, note: `sent-image-id:${imgRow.id}` };
+        } catch (e) {
+          console.error("[sendProductImagesForClient by image ID]", e);
+        }
+      }
+    }
+  }
+
+  // 2. Otherwise, lookup by Product Name or Product ID
   const { data: prods } = await supabaseAdmin
     .from("products")
-    .select("id,name")
+    .select("id,name, product_images(id, image_path, sort_order)")
     .eq("user_id", userId)
     .eq("is_active", true);
 
   if (!prods || prods.length === 0) return { sent: 0, note: "no-products" };
 
   let product: any = null;
-  const target = normalizeName(productNameFromAi || "");
+  const target = normalizeName(cleanParam);
   if (target) {
     product =
-      prods.find((p: any) => normalizeName(p.name) === target) ??
+      prods.find((p: any) => p.id === cleanParam || normalizeName(p.name) === target) ??
       prods.find(
         (p: any) => normalizeName(p.name).includes(target) || target.includes(normalizeName(p.name)),
       );
@@ -1211,11 +1253,7 @@ async function sendProductImagesForClient(
     product = prods[0];
   }
 
-  const { data: images } = await supabaseAdmin
-    .from("product_images")
-    .select("id,image_path")
-    .eq("product_id", product.id)
-    .order("sort_order", { ascending: true });
+  const images = (product.product_images ?? []).sort((a: any, b: any) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
   if (!images || images.length === 0) return { sent: 0, note: "no-images" };
 
   // Read offset from client_ia_state
@@ -1238,22 +1276,17 @@ async function sendProductImagesForClient(
   for (const img of batch) {
     let urlToSend = img.image_path;
     if (
-      !img.image_path.startsWith("data:") &&
-      !img.image_path.startsWith("http://") &&
-      !img.image_path.startsWith("https://")
+      !urlToSend.startsWith("data:") &&
+      !urlToSend.startsWith("http://") &&
+      !urlToSend.startsWith("https://")
     ) {
-      const { data: signed } = await supabaseAdmin.storage
-        .from("product-images")
-        .createSignedUrl(img.image_path, 3600);
-      if (signed?.signedUrl) {
-        urlToSend = signed.signedUrl;
-      }
+      const { data: pub } = supabaseAdmin.storage.from("product-images").getPublicUrl(urlToSend);
+      urlToSend = pub?.publicUrl || urlToSend;
     }
     if (!urlToSend) continue;
     try {
       await sendMessengerImage(pageToken, senderId, urlToSend);
       sent++;
-      // Log image into messages_log so it's visible in Discussions UI
       await insertMessageLog(
         {
           user_id: userId,
@@ -1267,10 +1300,9 @@ async function sendProductImagesForClient(
         },
         "image-sent",
       );
-      // Small pause between individual photo sends
       await new Promise((r) => setTimeout(r, 250));
     } catch (e) {
-      console.error("[sendProductImagesForClient]", e);
+      console.error("[sendProductImagesForClient batch]", e);
     }
   }
 
