@@ -61,7 +61,12 @@ function getTextFromParts(parts: AiPart[]): string {
 }
 
 function appendClarityInstructions(systemPrompt: string): string {
-  return `${systemPrompt}\n\nIMPORTANT : Valio MIVANTANA amin'ny teny Malagasy (na Frantsay raha niteny frantsay) ny mpanjifa. AZA MANORATRA FANDINIHANA (thinking/scratchpad), AZA MANORATRA TENY ANGLAIS, AZA MANORATRA BROUILLON. Valin-teny farany ihany no avoaka.`;
+  return `${systemPrompt}
+
+RÈGLE ABSOLUE ET STRICTE :
+- Valio MIVANTANA amin'ny teny Malagasy (na Frantsay raha niteny frantsay) ny mpanjifa.
+- AZA MANORATRA FANDINIHANA (thinking/scratchpad), AZA MANORATRA TENY ANGLAIS, AZA MANORATRA BROUILLON NA AUTO-ÉVALUATION (ohatra : "No markdown? Yes", "Language: ...", "Length: ...", "Expansion: ...", "Closing: ...", "Draft: ...", "Let's expand").
+- Valin-teny farany vonona ho vakian'ny mpanjifa ihany no avoaka.`;
 }
 
 function looksTruncated(text: string): boolean {
@@ -280,16 +285,19 @@ export function sanitizeAiResponse(text: string): string {
   // 2. Extract technical action blocks first so they are never lost during cleanup
   const actionTags: string[] = [];
   cleaned = cleaned.replace(
-    /\[\[?\s*(?:SEND_?IMAGE_?ID|IMAGE_?ID|SEND_?IMAGE|SEND_?IMAGES?|SEND_?PHOTOS?|ORDER)[^\]\n]*\]\]?/gi,
+    /\[\[?\s*(?:SEND_?IMAGE_?ID|IMAGE_?ID|SEND_?IMAGE|SEND_?IMAGES?|SENDIMAGES?|SEND_?PHOTOS?|SENDPHOTOS?|ORDER)[^\]\n]*\]\]?/gi,
     (match) => {
-      actionTags.push(match.trim());
+      let normalized = match.trim();
+      if (!normalized.startsWith("[[")) normalized = "[" + normalized;
+      if (!normalized.endsWith("]]")) normalized = normalized + "]";
+      actionTags.push(normalized);
       return "";
     },
   );
 
   // 3. If explicit "Final response:" marker is present, take text after marker
   const finalMarkers = [
-    /(?:^|\n)(?:final response|reponse finale|réponse finale|valiny mivantana|final answer)\s*:\s*\n?/i,
+    /(?:^|\n)(?:final response|reponse finale|réponse finale|valiny mivantana|valiny farany|final answer)\s*:\s*\n?/i,
   ];
   for (const marker of finalMarkers) {
     const parts = cleaned.split(marker);
@@ -311,17 +319,34 @@ export function sanitizeAiResponse(text: string): string {
     }
 
     // Strip wrapping quotes on drafts: "Salama tompoko." -> Salama tompoko.
-    if ((line.startsWith('"') && line.endsWith('"')) || (line.startsWith("'") && line.endsWith("'"))) {
+    if (
+      (line.startsWith('"') && line.endsWith('"')) ||
+      (line.startsWith("'") && line.endsWith("'"))
+    ) {
       line = line.slice(1, -1).trim();
     }
 
     const low = line.toLowerCase();
 
+    // Check for audit checklist items like: No markdown? Yes. / Language: Malagasy? Yes. / No bullets? Yes (using numbers).
+    if (/\?\s*(?:yes|no|ok|done|true|false)\b/i.test(low)) {
+      continue;
+    }
+
     // Skip English thoughts, planning headers, and instruction echoes
     if (
-      /^(?:\*|\*\*|\[)?(?:thinking|thought|thoughts|reasoning|analyse|analysis|penser|réflexion|reflexion|internal notes|draft|plan|greeting|response|description|closing|technical block|technical|hook|value proposition|trust|trust\/ease|benefit|check|cta|final cta|urgency|urgency\/engagement|self-correction|step\s*\d+)\s*(?::|\*|\*\*|\]|\.|\-)?/i.test(
+      /^(?:\*|\*\*|\[)?(?:thinking|thought|thoughts|reasoning|analyse|analysis|penser|réflexion|reflexion|internal notes|draft|draft\s*\d+|plan|greeting|response|description|closing|technical block|technical|hook|value proposition|trust|trust\/ease|benefit|check|cta|final cta|urgency|urgency\/engagement|self-correction|step\s*\d+|expansion|length|language|audit|checklist|verification|self-check|rule check)\s*(?::|\*|\*\*|\]|\.|\-|\?)/i.test(
         low,
       ) ||
+      low.startsWith("no markdown") ||
+      low.startsWith("no bold") ||
+      low.startsWith("no bullet") ||
+      low.startsWith("no italic") ||
+      low.startsWith("needs to be around") ||
+      low.startsWith("let's expand") ||
+      low.startsWith("let us expand") ||
+      low.startsWith("add more detail") ||
+      low.startsWith("mention that the team") ||
       low.startsWith("do not describe this block") ||
       low.startsWith("only one send") ||
       low.startsWith("the user is asking") ||
@@ -331,7 +356,6 @@ export function sanitizeAiResponse(text: string): string {
       low.startsWith("no thinking process") ||
       low.startsWith("no repeating question") ||
       low.startsWith("same language") ||
-      low.startsWith("no markdown") ||
       low.startsWith("professional/warm") ||
       low.startsWith("professional style") ||
       low.startsWith("one block") ||
@@ -360,10 +384,33 @@ export function sanitizeAiResponse(text: string): string {
 
   cleaned = validLines.join("\n").replace(/\n{3,}/g, "\n\n").trim();
 
-  // 5. Remove duplicate paragraphs (from multiple drafts)
-  const paragraphs = cleaned.split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean);
+  // 5. If there is an isolated preamble draft list followed by the real conversational greeting, discard preamble
+  const paragraphs = cleaned
+    .split(/\n\s*\n/)
+    .map((p) => p.trim())
+    .filter(Boolean);
+
+  let startIndex = 0;
+  for (let i = 0; i < paragraphs.length; i++) {
+    const p = paragraphs[i];
+    if (
+      /^(?:miala tsiny|salama|manao ahoana|bonjour|bonsoir|misaotra|mankasitraka|eny tompoko|tsia tompoko|ity vokatra|momba ny|raha|ny vidin)/i.test(
+        p,
+      )
+    ) {
+      const preceding = paragraphs.slice(0, i).join(" ");
+      if (preceding && !/^(?:salama|bonjour|manao ahoana)/i.test(paragraphs[0])) {
+        startIndex = i;
+      }
+      break;
+    }
+  }
+
+  const usefulParagraphs = paragraphs.slice(startIndex);
+
+  // 6. Remove duplicate paragraphs (from multiple drafts)
   const dedupedParagraphs: string[] = [];
-  for (const p of paragraphs) {
+  for (const p of usefulParagraphs) {
     if (dedupedParagraphs.length > 0 && dedupedParagraphs[dedupedParagraphs.length - 1] === p) {
       continue;
     }
@@ -372,7 +419,14 @@ export function sanitizeAiResponse(text: string): string {
 
   cleaned = dedupedParagraphs.join("\n\n").trim();
 
-  // 6. Re-attach technical action tag at the end
+  // 7. Clean any remaining internal bracket tags
+  cleaned = cleaned.replace(/\[\[[\s\S]*?\]\]/g, "");
+  cleaned = cleaned.replace(
+    /\[(?:SEND_?IMAGE_?ID|SEND_?IMAGES?|SENDIMAGES?|SEND_?PHOTOS?|SENDPHOTOS?|ORDER)[^\]]*\]/gi,
+    "",
+  );
+
+  // 8. Re-attach technical action tag at the end
   if (actionTags.length > 0) {
     cleaned = `${cleaned}\n\n${actionTags[actionTags.length - 1]}`.trim();
   }

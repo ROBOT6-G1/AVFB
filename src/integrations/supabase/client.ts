@@ -58,6 +58,9 @@ class QueryBuilder {
   private orderAscending: boolean = true;
   private limitCount?: number;
   private relations: string[] = [];
+  private pendingInsertData?: any;
+  private pendingUpsertData?: any;
+  private pendingUpsertOptions?: { onConflict?: string };
   private pendingUpdateData?: any;
   private pendingDelete: boolean = false;
 
@@ -124,8 +127,29 @@ class QueryBuilder {
     return this;
   }
 
+  insert(data: any) {
+    this.pendingInsertData = data;
+    return this;
+  }
+
+  update(data: any) {
+    this.pendingUpdateData = data;
+    return this;
+  }
+
+  upsert(data: any, options?: { onConflict?: string }) {
+    this.pendingUpsertData = data;
+    this.pendingUpsertOptions = options;
+    return this;
+  }
+
+  delete() {
+    this.pendingDelete = true;
+    return this;
+  }
+
   private async fetchJoinedRelations(data: any[]) {
-    if (data.length === 0) return;
+    if (!data || data.length === 0) return;
 
     try {
       const fetchDocs = async (colName: string) => {
@@ -174,6 +198,91 @@ class QueryBuilder {
 
   async then(onfulfilled?: (value: any) => any, onrejected?: (reason: any) => any) {
     try {
+      // 1. Handle Insert
+      if (this.pendingInsertData !== undefined) {
+        const isArray = Array.isArray(this.pendingInsertData);
+        const items = isArray ? this.pendingInsertData : [this.pendingInsertData];
+        const inserted: any[] = [];
+
+        for (const item of items) {
+          const id = item.id || crypto.randomUUID();
+          const created_at = item.created_at || new Date().toISOString();
+          const updated_at = item.updated_at || new Date().toISOString();
+          const docData = { ...item, id, created_at, updated_at };
+
+          await setDoc(doc(db, this.colName, id), docData);
+          inserted.push(docData);
+        }
+        await this.fetchJoinedRelations(inserted);
+        const result = { data: isArray ? inserted : (inserted[0] ?? null), error: null };
+        return onfulfilled ? onfulfilled(result) : result;
+      }
+
+      // 2. Handle Upsert
+      if (this.pendingUpsertData !== undefined) {
+        const isArray = Array.isArray(this.pendingUpsertData);
+        const items = isArray ? this.pendingUpsertData : [this.pendingUpsertData];
+        const upserted: any[] = [];
+
+        for (const item of items) {
+          let id = item.id;
+          let existingDoc: any = null;
+
+          if (id) {
+            const docRef = doc(db, this.colName, id);
+            const docSnap = await getDoc(docRef);
+            if (docSnap.exists()) {
+              existingDoc = docSnap;
+            }
+          } else if (this.pendingUpsertOptions?.onConflict) {
+            const keys = this.pendingUpsertOptions.onConflict.split(",");
+            let q = query(collection(db, this.colName));
+            let hasAllKeys = true;
+            for (const key of keys) {
+              const trimmedKey = key.trim();
+              if (item[trimmedKey] !== undefined) {
+                q = query(q, where(trimmedKey, "==", item[trimmedKey]));
+              } else {
+                hasAllKeys = false;
+              }
+            }
+            if (hasAllKeys) {
+              const snapshot = await getDocs(query(q, firestoreLimit(1)));
+              if (!snapshot.empty) {
+                existingDoc = snapshot.docs[0];
+                id = existingDoc.id;
+              }
+            }
+          }
+
+          if (!id) {
+            id = crypto.randomUUID();
+          }
+
+          const created_at =
+            item.created_at ||
+            (existingDoc ? existingDoc.data().created_at : null) ||
+            new Date().toISOString();
+          const updated_at = new Date().toISOString();
+          const existingData = existingDoc ? existingDoc.data() : {};
+          const docData = {
+            ...existingData,
+            ...item,
+            id,
+            created_at,
+            updated_at,
+          };
+
+          const docRef = doc(db, this.colName, id);
+          await setDoc(docRef, docData, { merge: true });
+          upserted.push(docData);
+        }
+        await this.fetchJoinedRelations(upserted);
+        const result = { data: isArray ? upserted : (upserted[0] ?? null), error: null };
+        return onfulfilled ? onfulfilled(result) : result;
+      }
+
+      // 3. Normal Select Query
       let snapshot;
       try {
         let q = query(collection(db, this.colName));
@@ -191,7 +300,9 @@ class QueryBuilder {
         // Fallback: try querying by user_id if present, otherwise fetch entire collection
         const userFilter = this.filters.find((f) => f.field === "user_id" && f.op === "==");
         if (userFilter) {
-          snapshot = await getDocs(query(collection(db, this.colName), where("user_id", "==", userFilter.value)));
+          snapshot = await getDocs(
+            query(collection(db, this.colName), where("user_id", "==", userFilter.value)),
+          );
         } else {
           snapshot = await getDocs(collection(db, this.colName));
         }
@@ -210,7 +321,9 @@ class QueryBuilder {
         } else if (f.op === "<=") {
           data = data.filter((item: any) => item[f.field] <= f.value);
         } else if (f.op === "in") {
-          data = data.filter((item: any) => Array.isArray(f.value) && f.value.includes(item[f.field]));
+          data = data.filter(
+            (item: any) => Array.isArray(f.value) && f.value.includes(item[f.field]),
+          );
         }
       }
 
@@ -269,114 +382,22 @@ class QueryBuilder {
   async single() {
     const res = await this.then();
     if (res.error) return { data: null, error: res.error };
-    if (!res.data || res.data.length === 0) {
+    if (!res.data) {
       return { data: null, error: new Error("No record found") };
     }
-    return { data: res.data[0], error: null };
+    const item = Array.isArray(res.data) ? res.data[0] : res.data;
+    if (!item) {
+      return { data: null, error: new Error("No record found") };
+    }
+    return { data: item, error: null };
   }
 
   async maybeSingle() {
     const res = await this.then();
     if (res.error) return { data: null, error: res.error };
-    return { data: res.data && res.data.length > 0 ? res.data[0] : null, error: null };
-  }
-
-  async insert(data: any) {
-    try {
-      const items = Array.isArray(data) ? data : [data];
-      const inserted = [];
-
-      for (const item of items) {
-        const id = item.id || crypto.randomUUID();
-        const created_at = item.created_at || new Date().toISOString();
-        const updated_at = item.updated_at || new Date().toISOString();
-        const docData = { ...item, id, created_at, updated_at };
-
-        await setDoc(doc(db, this.colName, id), docData);
-        inserted.push(docData);
-      }
-      return { data: inserted, error: null };
-    } catch (err: any) {
-      return { data: null, error: err };
-    }
-  }
-
-  update(data: any) {
-    this.pendingUpdateData = data;
-    return this;
-  }
-
-  delete() {
-    this.pendingDelete = true;
-    return this;
-  }
-
-  async upsert(data: any, options?: { onConflict?: string }) {
-    try {
-      const items = Array.isArray(data) ? data : [data];
-      const upserted = [];
-
-      for (const item of items) {
-        let id = item.id;
-        let existingDoc: any = null;
-
-        // 1. If an ID is provided, check if it already exists in Firestore
-        if (id) {
-          const docRef = doc(db, this.colName, id);
-          const docSnap = await getDoc(docRef);
-          if (docSnap.exists()) {
-            existingDoc = docSnap;
-          }
-        } 
-        // 2. Otherwise, if onConflict is specified, look up the document by those fields
-        else if (options?.onConflict) {
-          const keys = options.onConflict.split(",");
-          let q = query(collection(db, this.colName));
-          let hasAllKeys = true;
-          for (const key of keys) {
-            const trimmedKey = key.trim();
-            if (item[trimmedKey] !== undefined) {
-              q = query(q, where(trimmedKey, "==", item[trimmedKey]));
-            } else {
-              hasAllKeys = false;
-            }
-          }
-          if (hasAllKeys) {
-            const snapshot = await getDocs(query(q, firestoreLimit(1)));
-            if (!snapshot.empty) {
-              existingDoc = snapshot.docs[0];
-              id = existingDoc.id;
-            }
-          }
-        }
-
-        // 3. Fallback to generating a new ID if none found
-        if (!id) {
-          id = crypto.randomUUID();
-        }
-
-        const created_at = item.created_at || (existingDoc ? existingDoc.data().created_at : null) || new Date().toISOString();
-        const updated_at = new Date().toISOString();
-
-        // Merge existing document fields with the incoming item so we NEVER erase other properties
-        const existingData = existingDoc ? existingDoc.data() : {};
-        const docData = {
-          ...existingData,
-          ...item,
-          id,
-          created_at,
-          updated_at,
-        };
-
-        const docRef = doc(db, this.colName, id);
-        await setDoc(docRef, docData, { merge: true });
-        upserted.push(docData);
-      }
-      return { data: upserted, error: null };
-    } catch (err: any) {
-      console.error("Firestore upsert error:", err);
-      return { data: null, error: err };
-    }
+    if (!res.data) return { data: null, error: null };
+    const item = Array.isArray(res.data) ? (res.data.length > 0 ? res.data[0] : null) : res.data;
+    return { data: item, error: null };
   }
 }
 

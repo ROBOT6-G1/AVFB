@@ -14,8 +14,8 @@ export const listTrainings = createServerFn({ method: "GET" })
   });
 
 const upsertSchema = z.object({
-  id: z.string().uuid().optional(),
-  name: z.string().min(1).max(200),
+  id: z.string().nullable().optional(),
+  name: z.string().min(1, "Veuillez renseigner le nom de la formation").max(200),
   description: z.string().max(5000).nullable().optional(),
   pricing_type: z.enum(["free", "paid"]),
   price: z.number().nullable().optional(),
@@ -28,17 +28,23 @@ export const upsertTraining = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d: unknown) => upsertSchema.parse(d))
   .handler(async ({ data, context }) => {
-    const payload = { ...data, user_id: context.userId };
-    if (data.pricing_type === "free") {
-      payload.price = null;
-      payload.payment_flow = null;
-    }
+    const cleanId = data.id && data.id.trim().length > 0 ? data.id.trim() : undefined;
+    const payload: Record<string, any> = {
+      name: data.name.trim(),
+      description: data.description ? data.description.trim() : null,
+      pricing_type: data.pricing_type,
+      price: data.pricing_type === "free" ? null : Number(data.price ?? 0),
+      payment_flow: data.pricing_type === "free" ? null : data.payment_flow,
+      video_link: data.video_link ? data.video_link.trim() : null,
+      is_active: data.is_active,
+      user_id: context.userId,
+    };
     let res;
-    if (data.id) {
+    if (cleanId) {
       res = await context.supabase
         .from("trainings")
         .update(payload)
-        .eq("id", data.id)
+        .eq("id", cleanId)
         .select()
         .single();
     } else {

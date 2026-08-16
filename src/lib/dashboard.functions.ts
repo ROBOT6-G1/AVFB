@@ -18,7 +18,7 @@ export const listPrompts = createServerFn({ method: "GET" })
   });
 
 const upsertPromptSchema = z.object({
-  id: z.string().uuid().optional(),
+  id: z.string().nullable().optional(),
   name: z.string().max(100).optional().default("Prompt IA"),
   content: z.string().min(1).max(20000),
   category: promptCategory,
@@ -33,7 +33,8 @@ export const upsertPrompt = createServerFn({ method: "POST" })
   .inputValidator((d: unknown) => upsertPromptSchema.parse(d))
   .handler(async ({ data, context }) => {
     const pageIds = data.page_ids ?? (data.page_id ? [data.page_id] : []);
-    const payload = {
+    const cleanId = data.id && data.id.trim().length > 0 ? data.id.trim() : undefined;
+    const payload: Record<string, any> = {
       ...data,
       name: data.name?.trim() || "Prompt IA",
       page_ids: pageIds,
@@ -41,6 +42,9 @@ export const upsertPrompt = createServerFn({ method: "POST" })
       assistance_type: data.assistance_type ?? null,
       user_id: context.userId,
     };
+    if (cleanId) payload.id = cleanId;
+    else delete payload.id;
+
     const { error } = await context.supabase.from("prompts").upsert(payload);
     if (error) throw new Error(error.message);
     return { ok: true };

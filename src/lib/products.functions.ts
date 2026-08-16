@@ -83,8 +83,8 @@ export const uploadProductImageServer = createServerFn({ method: "POST" })
   });
 
 const upsertSchema = z.object({
-  id: z.string().uuid().optional(),
-  name: z.string().min(1).max(200),
+  id: z.string().nullable().optional(),
+  name: z.string().min(1, "Veuillez renseigner le nom du produit").max(200),
   price: z.number().min(0),
   stock: z.number().int().min(0),
   description: z.string().max(5000).nullable().optional(),
@@ -97,17 +97,28 @@ export const upsertProduct = createServerFn({ method: "POST" })
   .inputValidator((d: unknown) => upsertSchema.parse(d))
   .handler(async ({ data, context }) => {
     let res;
-    if (data.id) {
+    const cleanId = data.id && data.id.trim().length > 0 ? data.id.trim() : undefined;
+    const payload = {
+      name: data.name.trim(),
+      price: Number(data.price),
+      stock: Number(data.stock),
+      description: data.description ? data.description.trim() : null,
+      payment_flow: data.payment_flow,
+      is_active: data.is_active,
+      user_id: context.userId,
+    };
+
+    if (cleanId) {
       res = await context.supabase
         .from("products")
-        .update({ ...data, user_id: context.userId })
-        .eq("id", data.id)
+        .update(payload)
+        .eq("id", cleanId)
         .select()
         .single();
     } else {
       res = await context.supabase
         .from("products")
-        .insert({ ...data, user_id: context.userId })
+        .insert(payload)
         .select()
         .single();
     }

@@ -14,7 +14,7 @@ export const listPaymentMethods = createServerFn({ method: "GET" })
   });
 
 const upsertSchema = z.object({
-  id: z.string().uuid().optional(),
+  id: z.string().nullable().optional(),
   label: z.string().min(1).max(100),
   number: z.string().min(1).max(100),
   instructions: z.string().max(1000).nullable().optional(),
@@ -25,9 +25,17 @@ export const upsertPaymentMethod = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d: unknown) => upsertSchema.parse(d))
   .handler(async ({ data, context }) => {
-    const { error } = await context.supabase
-      .from("payment_methods")
-      .upsert({ ...data, user_id: context.userId });
+    const cleanId = data.id && data.id.trim().length > 0 ? data.id.trim() : undefined;
+    const payload: Record<string, any> = {
+      label: data.label.trim(),
+      number: data.number.trim(),
+      instructions: data.instructions ? data.instructions.trim() : null,
+      is_active: data.is_active,
+      user_id: context.userId,
+    };
+    if (cleanId) payload.id = cleanId;
+
+    const { error } = await context.supabase.from("payment_methods").upsert(payload);
     if (error) throw new Error(error.message);
     return { ok: true };
   });
