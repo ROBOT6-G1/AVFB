@@ -61,7 +61,7 @@ function getTextFromParts(parts: AiPart[]): string {
 }
 
 function appendClarityInstructions(systemPrompt: string): string {
-  return `${systemPrompt}\n\nDIRECTIVES STRICTES DE RÉPONSE :\n- Réponds DIRECTEMENT et PRÉCISÉMENT à la question du client sans verbiage inutile.\n- Reste concis, clair, naturel et chaleureux.\n- Interdiction absolue d'afficher des réflexions, analyses, brouillons, balises 'Thinking' ou du texte en anglais.\n- Ne demande les informations de commande qu'UNE SEULE FOIS par étape après que le client a expressément confirmé vouloir acheter.`;
+  return `${systemPrompt}\n\nIMPORTANT : Valio MIVANTANA amin'ny teny Malagasy (na Frantsay raha niteny frantsay) ny mpanjifa. AZA MANORATRA FANDINIHANA (thinking/scratchpad), AZA MANORATRA TENY ANGLAIS, AZA MANORATRA BROUILLON. Valin-teny farany ihany no avoaka.`;
 }
 
 function looksTruncated(text: string): boolean {
@@ -274,9 +274,20 @@ export function sanitizeAiResponse(text: string): string {
   cleaned = cleaned.replace(/<think>[\s\S]*?<\/think>/gi, "");
   cleaned = cleaned.replace(/<thought>[\s\S]*?<\/thought>/gi, "");
   cleaned = cleaned.replace(/<reasoning>[\s\S]*?<\/reasoning>/gi, "");
-  cleaned = cleaned.replace(/```(?:thinking|thought|reasoning)[\s\S]*?```/gi, "");
+  cleaned = cleaned.replace(/<scratchpad>[\s\S]*?<\/scratchpad>/gi, "");
+  cleaned = cleaned.replace(/```(?:thinking|thought|reasoning|scratchpad)[\s\S]*?```/gi, "");
 
-  // 2. If the text has an explicit "Final response:" / "Réponse finale:" marker after thoughts, extract from there
+  // 2. Extract technical action blocks first so they are never lost during cleanup
+  const actionTags: string[] = [];
+  cleaned = cleaned.replace(
+    /\[\[?\s*(?:SEND_?IMAGE_?ID|IMAGE_?ID|SEND_?IMAGE|SEND_?IMAGES?|SEND_?PHOTOS?|ORDER)[^\]\n]*\]\]?/gi,
+    (match) => {
+      actionTags.push(match.trim());
+      return "";
+    },
+  );
+
+  // 3. If explicit "Final response:" marker is present, take text after marker
   const finalMarkers = [
     /(?:^|\n)(?:final response|reponse finale|réponse finale|valiny mivantana|final answer)\s*:\s*\n?/i,
   ];
@@ -288,124 +299,82 @@ export function sanitizeAiResponse(text: string): string {
     }
   }
 
-  // 3. Remove paragraphs and lines containing internal reasoning, planning, or rules check
-  const paragraphs = cleaned.split(/\n\s*\n/);
-  const cleanParagraphs = paragraphs.filter((p) => {
-    const lower = p.trim().toLowerCase();
-    if (
-      lower.startsWith("thinking:") ||
-      lower.startsWith("*thinking*") ||
-      lower.startsWith("**thinking") ||
-      lower.startsWith("thought:") ||
-      lower.startsWith("*thought") ||
-      lower.startsWith("**thought") ||
-      lower.startsWith("thoughts:") ||
-      lower.startsWith("analyse:") ||
-      lower.startsWith("analysis:") ||
-      lower.startsWith("reasoning:") ||
-      lower.startsWith("penser:") ||
-      lower.startsWith("réflexion:") ||
-      lower.startsWith("reflexion:") ||
-      lower.startsWith("internal notes:") ||
-      lower.startsWith("draft:") ||
-      lower.startsWith("plan:") ||
-      lower.startsWith("let's think") ||
-      lower.startsWith("let me think") ||
-      lower.startsWith("let me analyze") ||
-      lower.startsWith("let me see") ||
-      lower.startsWith("hook:") ||
-      lower.startsWith("value proposition:") ||
-      lower.startsWith("trust/ease:") ||
-      lower.startsWith("urgency/engagement:") ||
-      lower.startsWith("final cta:") ||
-      lower.startsWith("description:") ||
-      lower.startsWith("benefit:") ||
-      lower.startsWith("trust:") ||
-      lower.startsWith("check:") ||
-      lower === "check." ||
-      lower === "check" ||
-      lower === "ready." ||
-      lower.includes("the user's question") ||
-      lower.includes("the user is asking") ||
-      lower.includes("the customer is asking") ||
-      lower.includes("let's verify") ||
-      lower.includes("catalog rule") ||
-      lower.includes("final check") ||
-      lower.includes("total length is sufficient") ||
-      lower.includes("i will ensure") ||
-      lower.includes("self-correction") ||
-      lower.includes("facebook advertising expert") ||
-      lower.includes("attractive, professional") ||
-      lower.includes("no markdown") ||
-      lower.includes("character count") ||
-      lower.includes("(text looks good")
-    ) {
-      return false;
-    }
-    return true;
-  });
-
-  cleaned = cleanParagraphs.join("\n\n").trim();
-
-  // 4. Line-by-line cleanup of residual meta lines
+  // 4. Line-by-line filtering of English meta-commentary, scratchpad, rule checks, and draft quotes
   const lines = cleaned.split("\n");
-  const actualLines: string[] = [];
-  let inThoughtBlock = false;
+  const validLines: string[] = [];
 
-  for (const line of lines) {
-    const l = line.trim();
-    const low = l.toLowerCase();
+  for (const rawLine of lines) {
+    let line = rawLine.trim();
+    if (!line) {
+      validLines.push("");
+      continue;
+    }
 
+    // Strip wrapping quotes on drafts: "Salama tompoko." -> Salama tompoko.
+    if ((line.startsWith('"') && line.endsWith('"')) || (line.startsWith("'") && line.endsWith("'"))) {
+      line = line.slice(1, -1).trim();
+    }
+
+    const low = line.toLowerCase();
+
+    // Skip English thoughts, planning headers, and instruction echoes
     if (
-      /^(?:\*|\*\*|\[)?(?:thinking|thought|thoughts|reasoning|analyse|analysis|penser|réflexion|reflexion)\s*(?::|\*|\*\*|\])?/i.test(
+      /^(?:\*|\*\*|\[)?(?:thinking|thought|thoughts|reasoning|analyse|analysis|penser|réflexion|reflexion|internal notes|draft|plan|greeting|response|description|closing|technical block|technical|hook|value proposition|trust|trust\/ease|benefit|check|cta|final cta|urgency|urgency\/engagement|self-correction|step\s*\d+)\s*(?::|\*|\*\*|\]|\.|\-)?/i.test(
         low,
       ) ||
+      low.startsWith("do not describe this block") ||
+      low.startsWith("only one send") ||
+      low.startsWith("the user is asking") ||
+      low.startsWith("the customer is asking") ||
+      low.startsWith("the product being discussed") ||
+      low.startsWith("based on the product name") ||
+      low.startsWith("no thinking process") ||
+      low.startsWith("no repeating question") ||
+      low.startsWith("same language") ||
+      low.startsWith("no markdown") ||
+      low.startsWith("professional/warm") ||
+      low.startsWith("professional style") ||
+      low.startsWith("one block") ||
       low.startsWith("let me analyze") ||
-      low.startsWith("let's analyze")
-    ) {
-      inThoughtBlock = true;
-      continue;
-    }
-
-    if (inThoughtBlock) {
-      if (!l) continue;
-      // Stop skipping if we hit a genuine Malagasy / French customer response opening
-      if (
-        /^(salama|misaotra|bonjour|bonsoir|bjr|cc|coucou|hello|hi|manao ahoana|eny|tsia|oui|non|raha|ny|momba|mikasika|ireto|ity|io|izahay|afaka)\b/i.test(
-          l,
-        )
-      ) {
-        inThoughtBlock = false;
-      } else {
-        continue;
-      }
-    }
-
-    if (
-      low.startsWith("hook:") ||
-      low.startsWith("value proposition:") ||
-      low.startsWith("trust/ease:") ||
-      low.startsWith("urgency/engagement:") ||
-      low.startsWith("final cta:") ||
-      low.startsWith("description:") ||
-      low.startsWith("benefit:") ||
-      low.startsWith("trust:") ||
-      low.startsWith("check:") ||
-      low.startsWith("*thinking*") ||
-      low.startsWith("**thinking**") ||
-      low.includes("self-correction") ||
-      low.includes("(text looks good") ||
+      low.startsWith("let me check") ||
+      low.startsWith("let me see") ||
+      low.startsWith("let's analyze") ||
+      low.startsWith("let's check") ||
+      low.startsWith("let's think") ||
+      low.startsWith("i will ensure") ||
+      low.startsWith("acknowledge the request") ||
+      low.startsWith("briefly mention") ||
+      low.startsWith("a clear closing") ||
       low === "check." ||
       low === "check" ||
-      low === "ready."
+      low === "ready." ||
+      low.includes("(text looks good") ||
+      low.includes("total length is sufficient") ||
+      low.includes("character count")
     ) {
       continue;
     }
-    actualLines.push(line);
+
+    validLines.push(line);
   }
 
-  if (actualLines.length > 0) {
-    cleaned = actualLines.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+  cleaned = validLines.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+
+  // 5. Remove duplicate paragraphs (from multiple drafts)
+  const paragraphs = cleaned.split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean);
+  const dedupedParagraphs: string[] = [];
+  for (const p of paragraphs) {
+    if (dedupedParagraphs.length > 0 && dedupedParagraphs[dedupedParagraphs.length - 1] === p) {
+      continue;
+    }
+    dedupedParagraphs.push(p);
+  }
+
+  cleaned = dedupedParagraphs.join("\n\n").trim();
+
+  // 6. Re-attach technical action tag at the end
+  if (actionTags.length > 0) {
+    cleaned = `${cleaned}\n\n${actionTags[actionTags.length - 1]}`.trim();
   }
 
   return cleaned;
@@ -449,7 +418,7 @@ async function callGemini(
     // Attempt with thinking disabled first, then without if not supported
     for (const disableThinking of [true, false]) {
       try {
-        const genConfig: Record<string, any> = { temperature: 0.35, maxOutputTokens: 2000 };
+        const genConfig: Record<string, any> = { temperature: 0.1, maxOutputTokens: 1500 };
         if (disableThinking) {
           genConfig.thinkingConfig = { thinkingBudget: 0 };
         }
@@ -530,7 +499,7 @@ async function callLovableAi(
   const res = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
     method: "POST",
     headers: { "content-type": "application/json", "Lovable-API-Key": key },
-    body: JSON.stringify({ model: LOVABLE_MODEL, messages, temperature: 0.35, max_tokens: 2000 }),
+    body: JSON.stringify({ model: LOVABLE_MODEL, messages, temperature: 0.1, max_tokens: 1500 }),
   });
   if (!res.ok) throw new Error(`Lovable AI ${res.status}: ${(await res.text()).slice(0, 200)}`);
   const json: any = await res.json();
@@ -968,28 +937,85 @@ export async function sendMessengerReply(pageToken: string, recipientId: string,
 }
 
 /** Send a single image attachment via Messenger. Supports Data URLs, local file paths, and remote URLs with binary multipart upload. */
-async function sendMessengerImage(pageToken: string, recipientId: string, url: string) {
-  let blob: Blob | null = null;
-  let filename = "image.jpg";
-  let mimeType = "image/jpeg";
+const APP_BASE_URL =
+  process.env.APP_URL ||
+  process.env.PUBLIC_URL ||
+  "https://ais-dev-i7b5jeeh6qqkeyb3nv4dw4-469517843202.europe-west2.run.app";
 
-  if (url.startsWith("data:image/") || url.startsWith("data:application/")) {
-    const parsed = stripDataUrl(url);
-    if (parsed) {
-      const bytes = Uint8Array.from(atob(parsed.base64), (c) => c.charCodeAt(0));
-      mimeType = parsed.mime || "image/jpeg";
-      blob = new Blob([bytes], { type: mimeType });
-      filename = mimeType.includes("png") ? "image.png" : mimeType.includes("webp") ? "image.webp" : "image.jpg";
-    }
-  } else if (url.startsWith("/") || url.startsWith("public/") || url.startsWith("uploads/")) {
+function resolvePublicImageUrl(imagePathOrId: string, imageId?: string): string {
+  if (imageId) {
+    return `${APP_BASE_URL}/api/public/img?id=${encodeURIComponent(imageId)}`;
+  }
+  if (imagePathOrId.startsWith("http://") || imagePathOrId.startsWith("https://")) {
+    return imagePathOrId;
+  }
+  return `${APP_BASE_URL}/api/public/img?path=${encodeURIComponent(imagePathOrId)}`;
+}
+
+/** Send a single image attachment via Messenger. Supports Public URLs with fast Facebook download + binary multipart fallback. */
+async function sendMessengerImage(
+  pageToken: string,
+  recipientId: string,
+  rawUrlOrPath: string,
+  imageId?: string,
+) {
+  const publicUrl = resolvePublicImageUrl(rawUrlOrPath, imageId);
+
+  // 1. Primary Strategy: Facebook standard JSON payload with public URL
+  if (publicUrl.startsWith("http://") || publicUrl.startsWith("https://")) {
     try {
+      const res = await fetch(
+        `https://graph.facebook.com/v21.0/me/messages?access_token=${pageToken}`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            recipient: { id: recipientId },
+            message: {
+              attachment: {
+                type: "image",
+                payload: { url: publicUrl, is_reusable: false },
+              },
+            },
+            messaging_type: "RESPONSE",
+          }),
+        },
+      );
+
+      if (res.ok) {
+        return; // Succeeded!
+      }
+      const errText = await res.text();
+      console.warn(
+        `[sendMessengerImage:url] failed (${res.status}): ${errText.slice(0, 180)}, trying fallback...`,
+      );
+    } catch (urlErr) {
+      console.warn("[sendMessengerImage:url] network error:", urlErr);
+    }
+  }
+
+  // 2. Secondary Strategy: Multipart Binary FormData upload
+  try {
+    let blob: Blob | null = null;
+    let filename = "image.jpg";
+    let mimeType = "image/jpeg";
+
+    if (rawUrlOrPath.startsWith("data:image/") || rawUrlOrPath.startsWith("data:application/")) {
+      const parsed = stripDataUrl(rawUrlOrPath);
+      if (parsed) {
+        const bytes = Uint8Array.from(atob(parsed.base64), (c) => c.charCodeAt(0));
+        mimeType = parsed.mime || "image/jpeg";
+        blob = new Blob([bytes], { type: mimeType });
+        filename = mimeType.includes("png") ? "image.png" : "image.jpg";
+      }
+    } else if (rawUrlOrPath.startsWith("/") || rawUrlOrPath.startsWith("public/") || rawUrlOrPath.startsWith("uploads/")) {
       const fs = await import("fs");
       const path = await import("path");
-      const cleanPath = url.replace(/^\/+/, "");
+      const cleanPath = rawUrlOrPath.replace(/^\/+/, "");
       const possiblePaths = [
         path.join(process.cwd(), "public", cleanPath.replace(/^public\//, "")),
         path.join(process.cwd(), cleanPath),
-        path.join(process.cwd(), "public", "uploads", path.basename(url)),
+        path.join(process.cwd(), "public", "uploads", path.basename(rawUrlOrPath)),
       ];
       for (const p of possiblePaths) {
         if (fs.existsSync(p)) {
@@ -1001,12 +1027,8 @@ async function sendMessengerImage(pageToken: string, recipientId: string, url: s
           break;
         }
       }
-    } catch (e) {
-      console.warn("[sendMessengerImage] fs read failed:", e);
-    }
-  } else if (url.startsWith("http://") || url.startsWith("https://")) {
-    try {
-      const r = await fetch(url);
+    } else if (rawUrlOrPath.startsWith("http://") || rawUrlOrPath.startsWith("https://")) {
+      const r = await fetch(rawUrlOrPath);
       if (r.ok) {
         const ct = r.headers.get("content-type") || "image/jpeg";
         const buf = await r.arrayBuffer();
@@ -1014,49 +1036,34 @@ async function sendMessengerImage(pageToken: string, recipientId: string, url: s
         mimeType = ct;
         filename = ct.includes("png") ? "image.png" : "image.jpg";
       }
-    } catch (e) {
-      console.warn("[sendMessengerImage] download remote image failed, fallback to url payload:", e);
     }
-  }
 
-  // 1. Direct Binary / Multipart upload (most reliable on Facebook Messenger)
-  if (blob) {
-    const form = new FormData();
-    form.append("recipient", JSON.stringify({ id: recipientId }));
-    form.append("message", JSON.stringify({ attachment: { type: "image", payload: { is_reusable: false } } }));
-    form.append("filedata", blob, filename);
-    form.append("messaging_type", "RESPONSE");
+    if (blob) {
+      const form = new FormData();
+      form.append("recipient", JSON.stringify({ id: recipientId }));
+      form.append("message", JSON.stringify({ attachment: { type: "image", payload: { is_reusable: false } } }));
+      form.append("filedata", blob, filename);
+      form.append("messaging_type", "RESPONSE");
 
-    const res = await fetch(
-      `https://graph.facebook.com/v21.0/me/messages?access_token=${pageToken}`,
-      {
-        method: "POST",
-        body: form,
-      },
-    );
-    if (!res.ok) {
-      const errText = await res.text();
-      console.error(`[sendMessengerImage] multipart upload failed: ${res.status} - ${errText}`);
-      throw new Error(`Messenger image upload ${res.status}: ${errText.slice(0, 200)}`);
+      const res = await fetch(
+        `https://graph.facebook.com/v21.0/me/messages?access_token=${pageToken}`,
+        {
+          method: "POST",
+          body: form,
+        },
+      );
+
+      if (!res.ok) {
+        const errText = await res.text();
+        console.error(`[sendMessengerImage:binary] failed: ${res.status} - ${errText}`);
+        throw new Error(`Messenger image upload ${res.status}: ${errText.slice(0, 200)}`);
+      }
+      return;
     }
-    return;
+  } catch (binErr) {
+    console.error("[sendMessengerImage] binary fallback failed:", binErr);
+    throw binErr;
   }
-
-  // 2. URL Payload fallback
-  const res = await fetch(
-    `https://graph.facebook.com/v21.0/me/messages?access_token=${pageToken}`,
-    {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        recipient: { id: recipientId },
-        message: { attachment: { type: "image", payload: { url, is_reusable: false } } },
-        messaging_type: "RESPONSE",
-      }),
-    },
-  );
-  if (!res.ok)
-    throw new Error(`Messenger image ${res.status}: ${(await res.text()).slice(0, 200)}`);
 }
 
 const recentMidCache = new Map<string, number>();
@@ -1101,7 +1108,7 @@ export function extractAiActions(text: string): {
   });
 
   cleaned = cleaned.replace(
-    /\[\[?\s*(?:SEND_?IMAGE_?ID|IMAGE_?ID|SEND_?IMAGE|SEND_?IMAGES?|SEND_?PHOTOS?|IMAGES?|PHOTOS?|SARY|VOIR_?IMAGES?)(?::\s*([^\]\n]*?))?\s*\]\]?/gi,
+    /\[\[?\s*(?:SEND_?IMAGE_?ID|IMAGE_?ID|SEND_?IMAGE|SEND_?IMAGES?|SENDIMAGES?|SEND_?PHOTOS?|SENDPHOTOS?|IMAGES?|PHOTOS?|SARY|VOIR_?IMAGES?)(?::\s*([^\]\n]*?))?\s*\]\]?/gi,
     (_, name) => {
       imageRequests.push(String(name || "").trim());
       return "";
@@ -1110,7 +1117,7 @@ export function extractAiActions(text: string): {
 
   // Remove any remaining internal brackets or technical strings
   cleaned = cleaned.replace(/\[\[[\s\S]*?\]\]/g, "");
-  cleaned = cleaned.replace(/\[(?:SEND_?IMAGE_?ID|SEND_?IMAGES?|SEND_?PHOTOS?|ORDER)[^\]]*\]/gi, "");
+  cleaned = cleaned.replace(/\[(?:SEND_?IMAGE_?ID|SEND_?IMAGES?|SENDIMAGES?|SEND_?PHOTOS?|SENDPHOTOS?|ORDER)[^\]]*\]/gi, "");
 
   cleaned = cleaned.replace(/\n{3,}/g, "\n\n").trim();
   return { cleanText: cleaned, orders, imageRequests };
@@ -1200,33 +1207,26 @@ async function sendProductImagesForClient(
       .eq("id", cleanParam)
       .maybeSingle();
 
-    if (imgRow) {
-      let urlToSend = imgRow.image_path;
-      if (!urlToSend.startsWith("data:") && !urlToSend.startsWith("http://") && !urlToSend.startsWith("https://")) {
-        const { data: pub } = supabaseAdmin.storage.from("product-images").getPublicUrl(urlToSend);
-        urlToSend = pub?.publicUrl || urlToSend;
-      }
-      if (urlToSend) {
-        try {
-          await sendMessengerImage(pageToken, senderId, urlToSend);
-          const productName = (imgRow as any).products?.name || "Produit";
-          await insertMessageLog(
-            {
-              user_id: userId,
-              page_id: pageId,
-              sender_id: senderId,
-              content: `[Sary : ${productName}]`,
-              media_type: "image",
-              media_url: urlToSend,
-              direction: OUTGOING_DIRECTION,
-              status: "sent",
-            },
-            "image-sent",
-          );
-          return { sent: 1, note: `sent-image-id:${imgRow.id}` };
-        } catch (e) {
-          console.error("[sendProductImagesForClient by image ID]", e);
-        }
+    if (imgRow?.image_path) {
+      try {
+        await sendMessengerImage(pageToken, senderId, imgRow.image_path, imgRow.id);
+        const productName = (imgRow as any).products?.name || "Produit";
+        await insertMessageLog(
+          {
+            user_id: userId,
+            page_id: pageId,
+            sender_id: senderId,
+            content: `[Sary : ${productName}]`,
+            media_type: "image",
+            media_url: resolvePublicImageUrl(imgRow.image_path, imgRow.id),
+            direction: OUTGOING_DIRECTION,
+            status: "sent",
+          },
+          "image-sent",
+        );
+        return { sent: 1, note: `sent-image-id:${imgRow.id}` };
+      } catch (e) {
+        console.error("[sendProductImagesForClient by image ID]", e);
       }
     }
   }
@@ -1274,18 +1274,9 @@ async function sendProductImagesForClient(
 
   let sent = 0;
   for (const img of batch) {
-    let urlToSend = img.image_path;
-    if (
-      !urlToSend.startsWith("data:") &&
-      !urlToSend.startsWith("http://") &&
-      !urlToSend.startsWith("https://")
-    ) {
-      const { data: pub } = supabaseAdmin.storage.from("product-images").getPublicUrl(urlToSend);
-      urlToSend = pub?.publicUrl || urlToSend;
-    }
-    if (!urlToSend) continue;
+    if (!img.image_path) continue;
     try {
-      await sendMessengerImage(pageToken, senderId, urlToSend);
+      await sendMessengerImage(pageToken, senderId, img.image_path, img.id);
       sent++;
       await insertMessageLog(
         {
@@ -1294,13 +1285,13 @@ async function sendProductImagesForClient(
           sender_id: senderId,
           content: `[Sary : ${product.name}]`,
           media_type: "image",
-          media_url: urlToSend,
+          media_url: resolvePublicImageUrl(img.image_path, img.id),
           direction: OUTGOING_DIRECTION,
           status: "sent",
         },
         "image-sent",
       );
-      await new Promise((r) => setTimeout(r, 250));
+      await new Promise((r) => setTimeout(r, 350));
     } catch (e) {
       console.error("[sendProductImagesForClient batch]", e);
     }
