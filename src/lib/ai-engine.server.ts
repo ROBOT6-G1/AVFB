@@ -125,9 +125,10 @@ async function retryTruncatedReply(opts: {
       const raw = await callGemini(key.api_key, strictPrompt, opts.history, retryParts, modelToUse);
       await markKeyUsed(key.id);
       return { raw, provider: `gemini:${key.label}:completed` };
-    } catch (e) {
+    } catch (e: any) {
+      const isQuota = Boolean(e?.isQuota || (e instanceof Error && (e.message.includes("Quota") || e.message.includes("429"))));
       console.error("[Gemini retry] error", key.label, e);
-      await markKeyError(key.id, key.error_count ?? 0);
+      await markKeyError(key.id, key.error_count ?? 0, isQuota);
     }
   }
 
@@ -197,16 +198,16 @@ async function markKeyUsed(id: string) {
     .eq("id", id);
 }
 
-async function markKeyError(id: string, currentErrors: number) {
+async function markKeyError(id: string, currentErrors: number, isQuota = false) {
   const next = currentErrors + 1;
-  const disabled = next >= 5 ? new Date(Date.now() + 10 * 60 * 1000).toISOString() : null;
+  const disabled = isQuota || next >= 3 ? new Date(Date.now() + 15 * 60 * 1000).toISOString() : null;
   await supabaseAdmin
     .from("gemini_keys")
     .update({ error_count: next, disabled_until: disabled })
     .eq("id", id);
 }
 
-/** Auto-detect available Gemini models dynamically from the Google Gemini API key */
+/** Auto-detect available Gemini text/chat models dynamically from the Google Gemini API key */
 export async function fetchAvailableGeminiModels(apiKey: string): Promise<{ ok: boolean; models: string[]; error?: string }> {
   try {
     const cleanKey = (apiKey || "").trim();
@@ -223,7 +224,21 @@ export async function fetchAvailableGeminiModels(apiKey: string): Promise<{ ok: 
     const models = list
       .filter((m) => Array.isArray(m.supportedGenerationMethods) && m.supportedGenerationMethods.includes("generateContent"))
       .map((m) => (typeof m.name === "string" ? m.name.replace(/^models\//, "") : ""))
-      .filter(Boolean);
+      .filter((name) => {
+        if (!name) return false;
+        const lower = name.toLowerCase();
+        // Exclude TTS, embedding, audio, imagen, and non-chat models
+        if (
+          lower.includes("-tts") ||
+          lower.includes("embedding") ||
+          lower.includes("audio") ||
+          lower.includes("imagen") ||
+          lower.includes("aqa")
+        ) {
+          return false;
+        }
+        return true;
+      });
     return { ok: true, models };
   } catch (err: any) {
     return { ok: false, models: [], error: err.message || String(err) };
@@ -510,6 +525,13 @@ async function callGemini(
             continue;
           }
           lastError = `Gemini (${m}): ${t.slice(0, 180)}`;
+          // If key is out of quota (429 or RESOURCE_EXHAUSTED), fail immediately to try next key or fallback
+          if (res.status === 429 || t.includes("RESOURCE_EXHAUSTED") || t.toLowerCase().includes("quota")) {
+            console.warn(`[gemini] Key quota exceeded on model ${m}:`, lastError);
+            const quotaErr = new Error(`Quota dépassé pour cette clé (${m}): ${t.slice(0, 150)}`);
+            (quotaErr as any).isQuota = true;
+            throw quotaErr;
+          }
           console.warn(`[gemini] model ${m} failed:`, lastError);
           break; // move to next model
         }
@@ -661,11 +683,12 @@ export async function generateAiReply(opts: {
         }
       }
       return { text: cleaned, provider: `gemini:${key.label}` };
-    } catch (e) {
+    } catch (e: any) {
       const errMsg = e instanceof Error ? e.message : String(e);
+      const isQuota = Boolean(e?.isQuota || errMsg.includes("Quota") || errMsg.includes("429"));
       console.error("[Gemini] error", key.label, errMsg);
       keyErrors.push(`${key.label}: ${errMsg}`);
-      await markKeyError(key.id, key.error_count ?? 0);
+      await markKeyError(key.id, key.error_count ?? 0, isQuota);
     }
   }
 
