@@ -42,7 +42,17 @@ const emptyForm = {
 
 function ProduitsPage() {
   const qc = useQueryClient();
-  const { data: items = [] } = useQuery({ queryKey: ["products"], queryFn: () => listProducts() });
+  const { data: items = [] } = useQuery({
+    queryKey: ["products"],
+    queryFn: async () => {
+      try {
+        return await listProducts();
+      } catch (e) {
+        console.warn("Products query error", e);
+        return [];
+      }
+    },
+  });
   const [form, setForm] = useState(emptyForm);
   const [open, setOpen] = useState(false);
   const [gallery, setGallery] = useState<any | null>(null);

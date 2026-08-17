@@ -22,7 +22,14 @@ function DiscussionsPage() {
   const qc = useQueryClient();
   const { data: convs = [] } = useQuery({
     queryKey: ["conversations"],
-    queryFn: () => listConversations(),
+    queryFn: async () => {
+      try {
+        return await listConversations();
+      } catch (e) {
+        console.warn("Conversations query error", e);
+        return [];
+      }
+    },
     refetchInterval: 15000,
   });
   const [selected, setSelected] = useState<any | null>(null);
@@ -31,10 +38,16 @@ function DiscussionsPage() {
 
   const { data: messages = [] } = useQuery({
     queryKey: ["conversation", selected?.page_id, selected?.client_fb_id],
-    queryFn: () =>
-      listConversationMessages({
-        data: { page_id: selected.page_id, client_fb_id: selected.client_fb_id },
-      }),
+    queryFn: async () => {
+      try {
+        return await listConversationMessages({
+          data: { page_id: selected.page_id, client_fb_id: selected.client_fb_id },
+        });
+      } catch (e) {
+        console.warn("Conversation messages query error", e);
+        return [];
+      }
+    },
     enabled: !!selected,
     refetchInterval: 10000,
   });

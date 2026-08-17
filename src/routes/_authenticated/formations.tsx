@@ -58,7 +58,14 @@ function FormationsPage() {
   const qc = useQueryClient();
   const { data: items = [] } = useQuery({
     queryKey: ["trainings"],
-    queryFn: () => listTrainings(),
+    queryFn: async () => {
+      try {
+        return await listTrainings();
+      } catch (e) {
+        console.warn("Trainings query error", e);
+        return [];
+      }
+    },
   });
   const [form, setForm] = useState(emptyForm);
   const [open, setOpen] = useState(false);

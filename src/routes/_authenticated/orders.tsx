@@ -33,12 +33,29 @@ const STATUS_COLORS: Record<string, string> = {
 
 function OrdersPage() {
   const qc = useQueryClient();
-  const { data: settings } = useQuery({ queryKey: ["settings"], queryFn: () => getSettings() });
+  const { data: settings } = useQuery({
+    queryKey: ["settings"],
+    queryFn: async () => {
+      try {
+        return await getSettings();
+      } catch (e) {
+        console.warn("Settings query error", e);
+        return { assistance_type: "sales" };
+      }
+    },
+  });
   const type = ((settings as any)?.assistance_type === "sales" ? "sales" : "training") as
     "sales" | "training";
   const { data: orders = [] } = useQuery({
     queryKey: ["orders", type],
-    queryFn: () => listOrders({ data: { type } }),
+    queryFn: async () => {
+      try {
+        return await listOrders({ data: { type } });
+      } catch (e) {
+        console.warn("Orders query error", e);
+        return [];
+      }
+    },
     enabled: !!settings,
   });
 

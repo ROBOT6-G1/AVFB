@@ -24,7 +24,14 @@ function PaymentsPage() {
   const qc = useQueryClient();
   const { data: items = [] } = useQuery({
     queryKey: ["payment-methods"],
-    queryFn: () => listPaymentMethods(),
+    queryFn: async () => {
+      try {
+        return await listPaymentMethods();
+      } catch (e) {
+        console.warn("Payment methods query error", e);
+        return [];
+      }
+    },
   });
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState({
