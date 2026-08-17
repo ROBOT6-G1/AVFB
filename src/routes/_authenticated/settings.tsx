@@ -13,20 +13,42 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { getSettings, updateSettings, replyAllPendingMessages } from "@/lib/dashboard.functions";
-import { Save, Send, Loader2, Facebook, KeyRound, Sparkles } from "lucide-react";
+import {
+  getSettings,
+  updateSettings,
+  replyAllPendingMessages,
+} from "@/lib/dashboard.functions";
+import {
+  getSupabaseOAuthStatus,
+  selectSupabaseProject,
+  disconnectSupabaseOAuth,
+  getSupabaseAuthUrl,
+} from "@/lib/supabase-oauth.functions";
+import { Save, Send, Loader2, Facebook, KeyRound, Sparkles, Database, CheckCircle2, RefreshCw, ExternalLink } from "lucide-react";
 import { toast } from "sonner";
 
 const settingsQuery = queryOptions({ queryKey: ["settings"], queryFn: () => getSettings() });
+const supabaseStatusQuery = queryOptions({
+  queryKey: ["supabase-oauth-status"],
+  queryFn: () => getSupabaseOAuthStatus(),
+});
 
 export const Route = createFileRoute("/_authenticated/settings")({
-  loader: ({ context }) => context.queryClient.ensureQueryData(settingsQuery),
+  loader: ({ context }) => {
+    return Promise.all([
+      context.queryClient.ensureQueryData(settingsQuery),
+      context.queryClient.ensureQueryData(supabaseStatusQuery),
+    ]);
+  },
   component: SettingsPage,
 });
 
 function SettingsPage() {
   const { data } = useSuspenseQuery(settingsQuery);
+  const { data: sbStatus } = useSuspenseQuery(supabaseStatusQuery);
   const qc = useQueryClient();
+  const [sbConnecting, setSbConnecting] = useState(false);
+  const [sbSelecting, setSbSelecting] = useState(false);
   const [form, setForm] = useState({
     assistance_type: (data as any)?.assistance_type ?? "online_work",
     auto_reply_messages: data?.auto_reply_messages ?? true,
@@ -57,7 +79,75 @@ function SettingsPage() {
     }
   }, [data]);
 
-  const [replying, setReplying] = useState(false);
+  const connectSupabase = async () => {
+    setSbConnecting(true);
+    try {
+      const redirectUri = `${window.location.origin}/api/public/supabase/callback`;
+      const { url } = await getSupabaseAuthUrl({
+        data: {
+          redirectUri,
+          userId: data?.user_id || "current_user",
+          mode: "connect",
+        },
+      });
+
+      const width = 600;
+      const height = 700;
+      const left = window.screenX + (window.outerWidth - width) / 2;
+      const top = window.screenY + (window.outerHeight - height) / 2;
+      const popup = window.open(
+        url,
+        "supabase_oauth",
+        `width=${width},height=${height},left=${left},top=${top},status=no,toolbar=no,menubar=no`,
+      );
+
+      if (!popup || popup.closed || typeof popup.closed === "undefined") {
+        window.location.href = url;
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Erreur OAuth Supabase");
+    } finally {
+      setSbConnecting(false);
+    }
+  };
+
+  const handleSelectProject = async (projectId: string) => {
+    setSbSelecting(true);
+    try {
+      await selectSupabaseProject({ data: { projectId } });
+      toast.success("Projet Supabase activé pour votre compte !");
+      qc.invalidateQueries({ queryKey: ["supabase-oauth-status"] });
+      qc.invalidateQueries({ queryKey: ["settings"] });
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Erreur de sélection");
+    } finally {
+      setSbSelecting(false);
+    }
+  };
+
+  const handleDisconnectSupabase = async () => {
+    if (!confirm("Voulez-vous déconnecter votre compte Supabase ?")) return;
+    try {
+      await disconnectSupabaseOAuth();
+      toast.success("Compte Supabase déconnecté.");
+      qc.invalidateQueries({ queryKey: ["supabase-oauth-status"] });
+      qc.invalidateQueries({ queryKey: ["settings"] });
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Erreur");
+    }
+  };
+
+  useEffect(() => {
+    const handleMessage = (event: MessageEvent) => {
+      if (event.data?.type === "SUPABASE_OAUTH_SUCCESS") {
+        toast.success("Compte Supabase connecté avec succès !");
+        qc.invalidateQueries({ queryKey: ["supabase-oauth-status"] });
+        qc.invalidateQueries({ queryKey: ["settings"] });
+      }
+    };
+    window.addEventListener("message", handleMessage);
+    return () => window.removeEventListener("message", handleMessage);
+  }, [qc]);
 
   const save = async () => {
     try {
@@ -223,6 +313,166 @@ function SettingsPage() {
           <Save className="h-4 w-4 mr-2" />
           Enregistrer
         </Button>
+      </Card>
+
+      {/* Supabase OAuth Integration */}
+      <Card className="glass p-6 space-y-4 border-emerald-500/20">
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <div className="flex items-center gap-3">
+            <div className="h-10 w-10 rounded-xl bg-emerald-500/15 text-emerald-400 flex items-center justify-center">
+              <Database className="h-5 w-5" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h2 className="text-lg font-semibold">Base de Données Supabase (OAuth)</h2>
+                {sbStatus.isConnected && (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/20 px-2 py-0.5 text-xs font-medium text-emerald-400">
+                    <CheckCircle2 className="h-3 w-3" /> Connecté
+                  </span>
+                )}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Connexion directe à votre organisation Supabase pour synchroniser la base de données et le stockage.
+              </p>
+            </div>
+          </div>
+
+          <div>
+            {sbStatus.isConnected ? (
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={connectSupabase}
+                  disabled={sbConnecting}
+                  className="text-xs"
+                >
+                  <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${sbConnecting ? "animate-spin" : ""}`} />
+                  Resynchroniser
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={handleDisconnectSupabase}
+                  className="text-xs text-red-400 hover:text-red-300 hover:bg-red-500/10"
+                >
+                  Déconnecter
+                </Button>
+              </div>
+            ) : (
+              <Button
+                onClick={connectSupabase}
+                disabled={sbConnecting}
+                className="bg-emerald-600 hover:bg-emerald-500 text-white font-medium shadow-lg shadow-emerald-950/40"
+              >
+                {sbConnecting ? (
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                ) : (
+                  <svg className="h-4 w-4 mr-2" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M21.362 9.354H12V.343a.343.343 0 0 0-.583-.244L.367 11.15a.343.343 0 0 0 .243.585h9.39v9.011a.343.343 0 0 0 .584.244l11.05-11.051a.343.343 0 0 0-.272-.585z" />
+                  </svg>
+                )}
+                Connecter avec Supabase
+              </Button>
+            )}
+          </div>
+        </div>
+
+        {/* Redirect URI helper for Supabase Dashboard */}
+        <div className="rounded-lg bg-black/40 border border-emerald-500/20 p-3 text-xs space-y-3">
+          <div className="flex items-center justify-between gap-2">
+            <span className="font-semibold text-emerald-400">
+              🔗 Redirect URLs à coller dans votre Supabase Dashboard (OAuth Apps) :
+            </span>
+          </div>
+
+          <div className="space-y-2">
+            <div className="flex items-center justify-between gap-2 bg-black/60 p-2 rounded">
+              <code className="text-emerald-300 font-mono text-[11px] truncate">
+                https://aiserveurpagefb.vercel.app/api/public/supabase/callback
+              </code>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-6 text-[10px] shrink-0 border-emerald-500/30 hover:bg-emerald-500/10"
+                onClick={() => {
+                  navigator.clipboard.writeText("https://aiserveurpagefb.vercel.app/api/public/supabase/callback");
+                  toast.success("Lien Vercel copié !");
+                }}
+              >
+                Copier Vercel
+              </Button>
+            </div>
+
+            {typeof window !== "undefined" && !window.location.origin.includes("vercel.app") && (
+              <div className="flex items-center justify-between gap-2 bg-black/60 p-2 rounded">
+                <code className="text-emerald-300 font-mono text-[11px] truncate">
+                  {`${window.location.origin}/api/public/supabase/callback`}
+                </code>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-6 text-[10px] shrink-0 border-emerald-500/30 hover:bg-emerald-500/10"
+                  onClick={() => {
+                    navigator.clipboard.writeText(`${window.location.origin}/api/public/supabase/callback`);
+                    toast.success("Lien actuel copié !");
+                  }}
+                >
+                  Copier actuel
+                </Button>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {sbStatus.isConnected && (
+          <div className="space-y-4 pt-2 border-t border-border/50">
+            {sbStatus.projects.length > 0 && (
+              <div>
+                <Label className="text-xs text-muted-foreground uppercase font-semibold">
+                  Projet actif lié à votre compte
+                </Label>
+                <div className="mt-1.5 flex gap-2">
+                  <Select
+                    value={sbStatus.selectedProjectId || ""}
+                    onValueChange={(val) => handleSelectProject(val)}
+                    disabled={sbSelecting}
+                  >
+                    <SelectTrigger className="w-full">
+                      <SelectValue placeholder="Sélectionner un projet Supabase" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {sbStatus.projects.map((p: any) => (
+                        <SelectItem key={p.id} value={p.id}>
+                          {p.name} ({p.id}) {p.region ? `— ${p.region}` : ""}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+            )}
+
+            <div className="grid gap-3 sm:grid-cols-2 text-xs bg-muted/40 p-3 rounded-lg border border-border/40">
+              <div>
+                <span className="text-muted-foreground block">URL du Projet :</span>
+                <span className="font-mono text-foreground font-medium break-all">
+                  {sbStatus.selectedProjectUrl || "Non configuré"}
+                </span>
+              </div>
+              <div>
+                <span className="text-muted-foreground block">Organisation(s) liée(s) :</span>
+                <span className="text-foreground font-medium">
+                  {sbStatus.organizations.length > 0
+                    ? sbStatus.organizations.map((o: any) => o.name).join(", ")
+                    : "Organisation Supabase"}
+                </span>
+              </div>
+            </div>
+          </div>
+        )}
       </Card>
 
       <Card className="glass p-6 space-y-4">

@@ -295,9 +295,9 @@ export function sanitizeAiResponse(text: string): string {
     },
   );
 
-  // 3. If explicit "Final response:" marker is present, take text after marker
+  // 3. If explicit "Final response / Final Text Construction" marker is present, take text after marker
   const finalMarkers = [
-    /(?:^|\n)(?:final response|reponse finale|réponse finale|valiny mivantana|valiny farany|final answer)\s*:\s*\n?/i,
+    /(?:^|\n)\s*(?:final response|reponse finale|réponse finale|valiny mivantana|valiny farany|final answer|final text construction|final text)\s*:\s*\n?/i,
   ];
   for (const marker of finalMarkers) {
     const parts = cleaned.split(marker);
@@ -328,14 +328,24 @@ export function sanitizeAiResponse(text: string): string {
 
     const low = line.toLowerCase();
 
-    // Check for audit checklist items like: No markdown? Yes. / Language: Malagasy? Yes. / No bullets? Yes (using numbers).
-    if (/\?\s*(?:yes|no|ok|done|true|false)\b/i.test(low)) {
+    // Check for audit checklist items like: No markdown? Yes. / Language: Malagasy? Yes. / No bullets? Check.
+    if (/\?\s*(?:yes|no|ok|done|true|false|check|malagasy|french|english)\b/i.test(low)) {
+      continue;
+    }
+    if (
+      low.startsWith("(") &&
+      (low.includes("prompt says") ||
+        low.includes("wait,") ||
+        low.includes("let's ensure") ||
+        low.includes("no characters") ||
+        low.includes("catalog is"))
+    ) {
       continue;
     }
 
     // Skip English thoughts, planning headers, and instruction echoes
     if (
-      /^(?:\*|\*\*|\[)?(?:thinking|thought|thoughts|reasoning|analyse|analysis|penser|réflexion|reflexion|internal notes|draft|draft\s*\d+|plan|greeting|response|description|closing|technical block|technical|hook|value proposition|trust|trust\/ease|benefit|check|cta|final cta|urgency|urgency\/engagement|self-correction|step\s*\d+|expansion|length|language|audit|checklist|verification|self-check|rule check)\s*(?::|\*|\*\*|\]|\.|\-|\?)/i.test(
+      /^(?:\*|\*\*|\[)?(?:thinking|thought|thoughts|reasoning|analyse|analysis|penser|réflexion|reflexion|internal notes|draft|draft\s*\d+|plan|greeting|response|description|closing|technical block|technical|hook|value proposition|trust|trust\/ease|benefit|check|cta|final cta|urgency|urgency\/engagement|self-correction|step\s*\d+|expansion|length|language|audit|checklist|verification|self-check|rule check|final text construction|final text)\s*(?::|\*|\*\*|\]|\.|\-|\?)/i.test(
         low,
       ) ||
       low.startsWith("no markdown") ||
@@ -365,6 +375,7 @@ export function sanitizeAiResponse(text: string): string {
       low.startsWith("let's analyze") ||
       low.startsWith("let's check") ||
       low.startsWith("let's think") ||
+      low.startsWith("let's ensure") ||
       low.startsWith("i will ensure") ||
       low.startsWith("acknowledge the request") ||
       low.startsWith("briefly mention") ||
@@ -408,12 +419,12 @@ export function sanitizeAiResponse(text: string): string {
 
   const usefulParagraphs = paragraphs.slice(startIndex);
 
-  // 6. Remove duplicate paragraphs (from multiple drafts)
+  // 6. Deduplicate repeated paragraphs (e.g. repeated greetings)
   const dedupedParagraphs: string[] = [];
+  const seenParagraphs = new Set<string>();
   for (const p of usefulParagraphs) {
-    if (dedupedParagraphs.length > 0 && dedupedParagraphs[dedupedParagraphs.length - 1] === p) {
-      continue;
-    }
+    if (seenParagraphs.has(p)) continue;
+    seenParagraphs.add(p);
     dedupedParagraphs.push(p);
   }
 
@@ -585,7 +596,8 @@ export async function generateAiReply(opts: {
   if (lovableEnabled) {
     try {
       const raw = await callLovableAi(strictSystemPrompt, history, parts);
-      const cleaned = sanitizeReply(raw, allowLinks);
+      const sanitized = sanitizeAiResponse(raw);
+      const cleaned = sanitizeReply(sanitized, allowLinks);
       if (looksTruncated(cleaned)) {
         const completed = await retryTruncatedReply({
           userId,
@@ -595,8 +607,10 @@ export async function generateAiReply(opts: {
           currentReply: cleaned,
           allowLinks,
         });
-        if (completed)
-          return { text: sanitizeReply(completed.raw, allowLinks), provider: completed.provider };
+        if (completed) {
+          const completedSanitized = sanitizeAiResponse(completed.raw);
+          return { text: sanitizeReply(completedSanitized, allowLinks), provider: completed.provider };
+        }
       }
       return { text: cleaned, provider: "lovable-ai" };
     } catch (e) {
@@ -625,7 +639,8 @@ export async function generateAiReply(opts: {
       if (!cleanKey) throw new Error(`Clé '${key.label}' vide`);
       const raw = await callGemini(cleanKey, strictSystemPrompt, history, parts, modelToUse);
       await markKeyUsed(key.id);
-      const cleaned = sanitizeReply(raw, allowLinks);
+      const sanitized = sanitizeAiResponse(raw);
+      const cleaned = sanitizeReply(sanitized, allowLinks);
       if (looksTruncated(cleaned)) {
         const completed = await retryTruncatedReply({
           userId,
@@ -635,8 +650,10 @@ export async function generateAiReply(opts: {
           currentReply: cleaned,
           allowLinks,
         });
-        if (completed)
-          return { text: sanitizeReply(completed.raw, allowLinks), provider: completed.provider };
+        if (completed) {
+          const completedSanitized = sanitizeAiResponse(completed.raw);
+          return { text: sanitizeReply(completedSanitized, allowLinks), provider: completed.provider };
+        }
       }
       return { text: cleaned, provider: `gemini:${key.label}` };
     } catch (e) {
@@ -1062,25 +1079,6 @@ async function sendMessengerImage(
         blob = new Blob([bytes], { type: mimeType });
         filename = mimeType.includes("png") ? "image.png" : "image.jpg";
       }
-    } else if (rawUrlOrPath.startsWith("/") || rawUrlOrPath.startsWith("public/") || rawUrlOrPath.startsWith("uploads/")) {
-      const fs = await import("fs");
-      const path = await import("path");
-      const cleanPath = rawUrlOrPath.replace(/^\/+/, "");
-      const possiblePaths = [
-        path.join(process.cwd(), "public", cleanPath.replace(/^public\//, "")),
-        path.join(process.cwd(), cleanPath),
-        path.join(process.cwd(), "public", "uploads", path.basename(rawUrlOrPath)),
-      ];
-      for (const p of possiblePaths) {
-        if (fs.existsSync(p)) {
-          const buf = fs.readFileSync(p);
-          const ext = path.extname(p).toLowerCase();
-          mimeType = ext === ".png" ? "image/png" : ext === ".webp" ? "image/webp" : "image/jpeg";
-          blob = new Blob([buf], { type: mimeType });
-          filename = path.basename(p);
-          break;
-        }
-      }
     } else if (rawUrlOrPath.startsWith("http://") || rawUrlOrPath.startsWith("https://")) {
       const r = await fetch(rawUrlOrPath);
       if (r.ok) {
@@ -1089,6 +1087,40 @@ async function sendMessengerImage(
         blob = new Blob([buf], { type: ct });
         mimeType = ct;
         filename = ct.includes("png") ? "image.png" : "image.jpg";
+      }
+    } else {
+      // 2a. Try Supabase storage download
+      try {
+        const { data: stBlob } = await supabaseAdmin.storage
+          .from("product-images")
+          .download(rawUrlOrPath);
+        if (stBlob) {
+          blob = stBlob;
+          mimeType = stBlob.type || "image/jpeg";
+          filename = "product.jpg";
+        }
+      } catch {}
+
+      // 2b. Try local filesystem
+      if (!blob) {
+        const fs = await import("fs");
+        const path = await import("path");
+        const cleanPath = rawUrlOrPath.replace(/^\/+/, "");
+        const possiblePaths = [
+          path.join(process.cwd(), "public", cleanPath.replace(/^public\//, "")),
+          path.join(process.cwd(), cleanPath),
+          path.join(process.cwd(), "public", "uploads", path.basename(rawUrlOrPath)),
+        ];
+        for (const p of possiblePaths) {
+          if (fs.existsSync(p)) {
+            const buf = fs.readFileSync(p);
+            const ext = path.extname(p).toLowerCase();
+            mimeType = ext === ".png" ? "image/png" : ext === ".webp" ? "image/webp" : "image/jpeg";
+            blob = new Blob([buf], { type: mimeType });
+            filename = path.basename(p);
+            break;
+          }
+        }
       }
     }
 

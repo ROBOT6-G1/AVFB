@@ -67,7 +67,27 @@ export const Route = createFileRoute("/api/public/img")({
             }
           }
 
-          // 3. Local filesystem
+          // 3. Supabase Storage download (e.g. "userId/productId/filename.jpg" in product-images)
+          try {
+            const { data: storageBlob, error: stErr } = await supabaseAdmin.storage
+              .from("product-images")
+              .download(rawPath);
+            if (!stErr && storageBlob) {
+              const mime = storageBlob.type || "image/jpeg";
+              const arrayBuffer = await storageBlob.arrayBuffer();
+              return new Response(Buffer.from(arrayBuffer), {
+                status: 200,
+                headers: {
+                  "Content-Type": mime,
+                  "Cache-Control": "public, max-age=604800, immutable",
+                },
+              });
+            }
+          } catch (stEx) {
+            // continue to local filesystem
+          }
+
+          // 4. Local filesystem
           const cleanPath = rawPath.replace(/^\/+/, "");
           const possiblePaths = [
             path.join(process.cwd(), "public", cleanPath.replace(/^public\//, "")),
