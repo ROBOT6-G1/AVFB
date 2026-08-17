@@ -7,7 +7,14 @@ import { MessageSquare } from "lucide-react";
 
 const messagesQuery = queryOptions({
   queryKey: ["messages-log"],
-  queryFn: () => listMessagesLog(),
+  queryFn: async () => {
+    try {
+      return await listMessagesLog();
+    } catch (e) {
+      console.warn("Messages query error", e);
+      return [];
+    }
+  },
 });
 
 export const Route = createFileRoute("/_authenticated/messages")({

@@ -8,8 +8,28 @@ import { getFacebookLoginUrl, getWebhookConfig } from "@/lib/facebook.functions"
 import { Facebook, Trash2, Copy, ExternalLink, Info } from "lucide-react";
 import { toast } from "sonner";
 
-const pagesQuery = queryOptions({ queryKey: ["fb-pages"], queryFn: () => listFacebookPages() });
-const webhookQuery = queryOptions({ queryKey: ["fb-webhook"], queryFn: () => getWebhookConfig() });
+const pagesQuery = queryOptions({
+  queryKey: ["fb-pages"],
+  queryFn: async () => {
+    try {
+      return await listFacebookPages();
+    } catch (e) {
+      console.warn("FB pages query error", e);
+      return [];
+    }
+  },
+});
+const webhookQuery = queryOptions({
+  queryKey: ["fb-webhook"],
+  queryFn: async () => {
+    try {
+      return await getWebhookConfig();
+    } catch (e) {
+      console.warn("FB webhook query error", e);
+      return { callbackUrl: "", verifyToken: "" };
+    }
+  },
+});
 
 export const Route = createFileRoute("/_authenticated/facebook")({
   loader: ({ context }) =>

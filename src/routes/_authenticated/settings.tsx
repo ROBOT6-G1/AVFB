@@ -43,10 +43,27 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
-const settingsQuery = queryOptions({ queryKey: ["settings"], queryFn: () => getSettings() });
+const settingsQuery = queryOptions({
+  queryKey: ["settings"],
+  queryFn: async () => {
+    try {
+      return await getSettings();
+    } catch (e) {
+      console.warn("Settings query error", e);
+      return null;
+    }
+  },
+});
 const supabaseStatusQuery = queryOptions({
   queryKey: ["supabase-oauth-status"],
-  queryFn: () => getSupabaseOAuthStatus(),
+  queryFn: async () => {
+    try {
+      return await getSupabaseOAuthStatus();
+    } catch (e) {
+      console.warn("Supabase OAuth status query error", e);
+      return { isConnected: false };
+    }
+  },
 });
 
 export const Route = createFileRoute("/_authenticated/settings")({

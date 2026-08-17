@@ -40,9 +40,26 @@ import { toast } from "sonner";
 
 const postsQuery = queryOptions({
   queryKey: ["scheduled-posts"],
-  queryFn: () => listScheduledPosts(),
+  queryFn: async () => {
+    try {
+      return await listScheduledPosts();
+    } catch (e) {
+      console.warn("Scheduled posts query error", e);
+      return [];
+    }
+  },
 });
-const pagesQuery = queryOptions({ queryKey: ["fb-pages"], queryFn: () => listFacebookPages() });
+const pagesQuery = queryOptions({
+  queryKey: ["fb-pages"],
+  queryFn: async () => {
+    try {
+      return await listFacebookPages();
+    } catch (e) {
+      console.warn("FB pages query error", e);
+      return [];
+    }
+  },
+});
 
 export const Route = createFileRoute("/_authenticated/auto-post")({
   loader: ({ context }) =>

@@ -11,7 +11,14 @@ import { toast } from "sonner";
 
 const commentsQuery = queryOptions({
   queryKey: ["comments-log"],
-  queryFn: () => listCommentsLog(),
+  queryFn: async () => {
+    try {
+      return await listCommentsLog();
+    } catch (e) {
+      console.warn("Comments query error", e);
+      return [];
+    }
+  },
 });
 
 export const Route = createFileRoute("/_authenticated/comments")({

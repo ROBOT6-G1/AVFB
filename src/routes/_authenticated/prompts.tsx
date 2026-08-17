@@ -33,8 +33,28 @@ import {
 import { Plus, Pencil, Trash2, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 
-const promptsQuery = queryOptions({ queryKey: ["prompts"], queryFn: () => listPrompts() });
-const pagesQuery = queryOptions({ queryKey: ["fb-pages"], queryFn: () => listFacebookPages() });
+const promptsQuery = queryOptions({
+  queryKey: ["prompts"],
+  queryFn: async () => {
+    try {
+      return await listPrompts();
+    } catch (e) {
+      console.warn("Prompts query error", e);
+      return [];
+    }
+  },
+});
+const pagesQuery = queryOptions({
+  queryKey: ["fb-pages"],
+  queryFn: async () => {
+    try {
+      return await listFacebookPages();
+    } catch (e) {
+      console.warn("Pages query error", e);
+      return [];
+    }
+  },
+});
 
 export const Route = createFileRoute("/_authenticated/prompts")({
   loader: ({ context }) =>

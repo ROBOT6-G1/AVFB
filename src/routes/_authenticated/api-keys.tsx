@@ -26,7 +26,17 @@ import {
 import { Plus, Trash2, KeyRound, RotateCcw, CheckCircle2, AlertCircle } from "lucide-react";
 import { toast } from "sonner";
 
-const keysQuery = queryOptions({ queryKey: ["gemini-keys"], queryFn: () => listGeminiKeys() });
+const keysQuery = queryOptions({
+  queryKey: ["gemini-keys"],
+  queryFn: async () => {
+    try {
+      return await listGeminiKeys();
+    } catch (e) {
+      console.warn("Gemini keys query error", e);
+      return [];
+    }
+  },
+});
 
 export const Route = createFileRoute("/_authenticated/api-keys")({
   loader: ({ context }) => context.queryClient.ensureQueryData(keysQuery),

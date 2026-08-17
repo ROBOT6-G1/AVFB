@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useSuspenseQuery, useQueryClient, queryOptions } from "@tanstack/react-query";
+import { useQuery, useQueryClient, queryOptions } from "@tanstack/react-query";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -18,23 +18,47 @@ import { toast } from "sonner";
 
 const statsQuery = queryOptions({
   queryKey: ["dashboard-stats"],
-  queryFn: () => getDashboardStats(),
+  queryFn: async () => {
+    try {
+      return await getDashboardStats();
+    } catch (e) {
+      console.warn("Stats fetch fallback", e);
+      return { messages: 0, comments_replied: 0, active_keys: 0, connected_pages: 0 };
+    }
+  },
 });
-const settingsQuery = queryOptions({ queryKey: ["settings"], queryFn: () => getSettings() });
+const settingsQuery = queryOptions({
+  queryKey: ["settings"],
+  queryFn: async () => {
+    try {
+      return await getSettings();
+    } catch (e) {
+      console.warn("Settings fetch fallback", e);
+      return { assistance_type: "online_work", global_ia_stopped: false };
+    }
+  },
+});
 
 export const Route = createFileRoute("/_authenticated/dashboard")({
-  loader: ({ context }) =>
-    Promise.all([
-      context.queryClient.ensureQueryData(statsQuery),
-      context.queryClient.ensureQueryData(settingsQuery),
-    ]),
+  loader: async ({ context }) => {
+    try {
+      await Promise.all([
+        context.queryClient.ensureQueryData(statsQuery),
+        context.queryClient.ensureQueryData(settingsQuery),
+      ]);
+    } catch (e) {
+      console.warn("Loader query warning", e);
+    }
+  },
   component: Dashboard,
 });
 
 function Dashboard() {
-  const { data } = useSuspenseQuery(statsQuery);
-  const { data: settings } = useSuspenseQuery(settingsQuery);
+  const { data: statsData } = useQuery(statsQuery);
+  const { data: settings } = useQuery(settingsQuery);
   const qc = useQueryClient();
+
+  const data = statsData || { messages: 0, comments_replied: 0, active_keys: 0, connected_pages: 0 };
   const stopped = (settings as any)?.global_ia_stopped ?? false;
 
   const toggle = async (v: boolean) => {

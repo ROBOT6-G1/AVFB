@@ -35,11 +35,18 @@ export const Route = createFileRoute("/_authenticated")({
     if (typeof window === "undefined") {
       return { user: null };
     }
-    const { data, error } = await supabase.auth.getUser();
-    if (error || !data.user) {
+    try {
+      const { data, error } = await supabase.auth.getUser();
+      if (error || !data?.user) {
+        throw redirect({ to: "/auth" });
+      }
+      return { user: data.user };
+    } catch (e: any) {
+      if (e && typeof e === "object" && ("to" in e || "href" in e || "statusCode" in e)) {
+        throw e;
+      }
       throw redirect({ to: "/auth" });
     }
-    return { user: data.user };
   },
   component: AuthenticatedLayout,
 });
@@ -85,7 +92,14 @@ function AuthenticatedLayout() {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const { data: settings } = useQuery({
     queryKey: ["settings"],
-    queryFn: () => getSettings(),
+    queryFn: async () => {
+      try {
+        return await getSettings();
+      } catch (e) {
+        console.warn("Settings query error", e);
+        return { assistance_type: "online_work" };
+      }
+    },
   });
   const assistanceType = (settings as any)?.assistance_type ?? "online_work";
   const navItems = NAV_BY_TYPE[assistanceType] ?? NAV_BY_TYPE.online_work;
