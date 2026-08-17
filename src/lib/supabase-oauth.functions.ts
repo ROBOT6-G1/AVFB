@@ -15,10 +15,11 @@ export const getSupabaseAuthUrl = createServerFn({ method: "POST" })
     const clientOrigin = data.redirectUri ? new URL(data.redirectUri).origin : "";
     const state = `${mode}:${uid}:${Date.now()}:${encodeURIComponent(clientOrigin)}`;
 
-    // Use registered canonical callback URL so Supabase API never rejects with "redirect_uri not allowed"
+    // Use dynamic redirectUri based on client request or fallback to Vercel production URL
     const redirectUri =
+      data.redirectUri ||
       process.env.SUPABASE_OAUTH_REDIRECT_URI ||
-      "https://ais-dev-i7b5jeeh6qqkeyb3nv4dw4-469517843202.europe-west2.run.app/api/public/supabase/callback";
+      "https://ia-assistante.vercel.app/api/public/supabase/callback";
 
     const url = getSupabaseOAuthAuthorizeUrl(redirectUri, state);
     return { url, redirectUri };

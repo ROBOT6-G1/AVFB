@@ -32,8 +32,7 @@ export const Route = createFileRoute("/api/public/supabase/callback")({
 
         const origin = `${url.protocol}//${url.host}`;
         const redirectUri =
-          process.env.SUPABASE_OAUTH_REDIRECT_URI ||
-          "https://ais-dev-i7b5jeeh6qqkeyb3nv4dw4-469517843202.europe-west2.run.app/api/public/supabase/callback";
+          process.env.SUPABASE_OAUTH_REDIRECT_URI || `${origin}/api/public/supabase/callback`;
 
         // Parse state: mode:userId:timestamp:encodedOrigin
         const [mode, rawUserId, timestamp, rawOrigin] = (state || "connect:anonymous").split(":");
