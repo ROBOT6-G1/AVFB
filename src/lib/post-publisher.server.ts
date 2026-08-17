@@ -349,7 +349,9 @@ export async function runScheduledPost(
     } else {
       const imageUrls: string[] = [];
       for (const p of publishPaths) {
-        if (p.startsWith("data:image/")) {
+        if (p.startsWith("http://") || p.startsWith("https://")) {
+          imageUrls.push(p);
+        } else if (p.startsWith("data:image/")) {
           const parsed = stripDataUrl(p);
           if (parsed) {
             const bin = Uint8Array.from(atob(parsed.base64), (c) => c.charCodeAt(0));

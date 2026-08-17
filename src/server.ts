@@ -2,6 +2,14 @@ import "./lib/error-capture";
 
 import { consumeLastCapturedError } from "./lib/error-capture";
 import { renderErrorPage } from "./lib/error-page";
+import { startBackgroundWorker } from "./lib/background-worker.server";
+
+// Start background worker loop for automatic message responses and post scheduling
+try {
+  startBackgroundWorker();
+} catch (e) {
+  console.warn("Background worker start warning:", e);
+}
 
 type ServerEntry = {
   fetch: (request: Request, env: unknown, ctx: unknown) => Promise<Response> | Response;

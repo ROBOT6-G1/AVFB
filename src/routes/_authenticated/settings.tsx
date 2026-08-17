@@ -17,6 +17,7 @@ import {
   getSettings,
   updateSettings,
   replyAllPendingMessages,
+  scanAndReplyCommentsNow,
 } from "@/lib/dashboard.functions";
 import {
   getSupabaseOAuthStatus,
@@ -24,7 +25,22 @@ import {
   disconnectSupabaseOAuth,
   getSupabaseAuthUrl,
 } from "@/lib/supabase-oauth.functions";
-import { Save, Send, Loader2, Facebook, KeyRound, Sparkles, Database, CheckCircle2, RefreshCw, ExternalLink } from "lucide-react";
+import {
+  Save,
+  Send,
+  Loader2,
+  Facebook,
+  KeyRound,
+  Sparkles,
+  Database,
+  CheckCircle2,
+  RefreshCw,
+  ExternalLink,
+  Zap,
+  Clock,
+  Copy,
+  MessageSquare,
+} from "lucide-react";
 import { toast } from "sonner";
 
 const settingsQuery = queryOptions({ queryKey: ["settings"], queryFn: () => getSettings() });
@@ -51,6 +67,7 @@ function SettingsPage() {
   const [sbSelecting, setSbSelecting] = useState(false);
   const [saving, setSaving] = useState(false);
   const [replying, setReplying] = useState(false);
+  const [scanningComments, setScanningComments] = useState(false);
   const [form, setForm] = useState({
     assistance_type: (data as any)?.assistance_type ?? "online_work",
     auto_reply_messages: data?.auto_reply_messages ?? true,
@@ -191,6 +208,35 @@ function SettingsPage() {
     } finally {
       setReplying(false);
     }
+  };
+
+  const scanComments = async () => {
+    setScanningComments(true);
+    try {
+      const res = await scanAndReplyCommentsNow();
+      const detailStr = res.details?.length ? `\n${res.details.join("\n")}` : "";
+      if (res.errors > 0 && res.replied === 0) {
+        toast.error(
+          `${res.replied} réponse(s) sur ${res.scanned} commentaire(s) — ${res.errors} erreur(s)${detailStr}`,
+        );
+      } else {
+        toast.success(
+          `${res.replied} commentaire(s) répondu(s) sur ${res.scanned} analysé(s)${
+            res.errors ? ` (${res.errors} erreur(s))` : ""
+          }${detailStr}`,
+        );
+      }
+      qc.invalidateQueries({ queryKey: ["comments-log"] });
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Erreur");
+    } finally {
+      setScanningComments(false);
+    }
+  };
+
+  const copyToClipboard = (text: string, label: string) => {
+    navigator.clipboard.writeText(text);
+    toast.success(`${label} copié dans le presse-papier !`);
   };
 
   return (
@@ -523,22 +569,103 @@ function SettingsPage() {
         </Button>
       </Card>
 
-      <Card className="glass p-6 space-y-4">
-        <div>
-          <h2 className="text-lg font-semibold">Répondre à tous les messages privés</h2>
-          <p className="text-xs text-muted-foreground mt-1">
-            L'IA parcourt toutes les conversations Messenger en attente et envoie une réponse
-            adaptée.
+      <Card className="glass p-6 space-y-6">
+        <div className="flex items-start justify-between">
+          <div className="space-y-1">
+            <div className="flex items-center gap-2">
+              <Zap className="h-5 w-5 text-amber-500 animate-pulse" />
+              <h2 className="text-lg font-semibold">Automatisation & Cron IA (Arrière-plan)</h2>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Le robot IA s'exécute automatiquement toutes les 25 secondes en arrière-plan pour
+              répondre aux messages Messenger, publier les posts programmés et répondre aux commentaires.
+            </p>
+          </div>
+          <div className="flex items-center gap-1.5 px-2.5 py-1 bg-emerald-500/10 border border-emerald-500/30 rounded-full text-emerald-600 text-xs font-medium">
+            <CheckCircle2 className="h-3.5 w-3.5" />
+            <span>Cron Actif (25s)</span>
+          </div>
+        </div>
+
+        <div className="bg-background/60 rounded-lg p-4 border space-y-3">
+          <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+            Endpoints Cron Publics (Pour Crons externes / Vercel Cron / pg_cron)
+          </div>
+          <div className="space-y-2">
+            <div className="flex items-center justify-between gap-2 p-2 bg-muted/40 rounded border text-xs">
+              <span className="font-mono truncate text-muted-foreground">
+                {typeof window !== "undefined"
+                  ? `${window.location.origin}/api/public/hooks/cron`
+                  : "/api/public/hooks/cron"}
+              </span>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-7 text-xs shrink-0"
+                onClick={() =>
+                  copyToClipboard(
+                    `${window.location.origin}/api/public/hooks/cron`,
+                    "URL Cron Global",
+                  )
+                }
+              >
+                <Copy className="h-3.5 w-3.5 mr-1" />
+                Copier
+              </Button>
+            </div>
+            <div className="flex items-center justify-between gap-2 p-2 bg-muted/40 rounded border text-xs">
+              <span className="font-mono truncate text-muted-foreground">
+                {typeof window !== "undefined"
+                  ? `${window.location.origin}/api/public/hooks/reply-all-messages`
+                  : "/api/public/hooks/reply-all-messages"}
+              </span>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-7 text-xs shrink-0"
+                onClick={() =>
+                  copyToClipboard(
+                    `${window.location.origin}/api/public/hooks/reply-all-messages`,
+                    "URL Cron Messages",
+                  )
+                }
+              >
+                <Copy className="h-3.5 w-3.5 mr-1" />
+                Copier
+              </Button>
+            </div>
+          </div>
+          <p className="text-[11px] text-muted-foreground">
+            💡 Vous pouvez utiliser gratuitement un service comme <a href="https://cron-job.org" target="_blank" rel="noreferrer" className="text-primary underline">cron-job.org</a> ou <a href="https://uptimerobot.com" target="_blank" rel="noreferrer" className="text-primary underline">UptimeRobot</a> pour appeler cette URL toutes les minutes si vous souhaitez une redondance externe 24/7.
           </p>
         </div>
-        <Button onClick={replyAll} disabled={replying} variant="secondary">
-          {replying ? (
-            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-          ) : (
-            <Send className="h-4 w-4 mr-2" />
-          )}
-          {replying ? "Traitement en cours…" : "Répondre à tous les messages privés"}
-        </Button>
+
+        <div className="pt-2 border-t space-y-3">
+          <h3 className="text-sm font-semibold">Déclencheurs Manuels Immédiats</h3>
+          <div className="flex flex-wrap gap-3">
+            <Button onClick={replyAll} disabled={replying} variant="secondary">
+              {replying ? (
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              ) : (
+                <Send className="h-4 w-4 mr-2 text-primary" />
+              )}
+              {replying ? "Réponses en cours…" : "Répondre à tous les messages privés"}
+            </Button>
+
+            <Button
+              onClick={scanComments}
+              disabled={scanningComments}
+              variant="outline"
+            >
+              {scanningComments ? (
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              ) : (
+                <MessageSquare className="h-4 w-4 mr-2 text-emerald-500" />
+              )}
+              {scanningComments ? "Scan en cours…" : "Scanner & répondre aux commentaires"}
+            </Button>
+          </div>
+        </div>
       </Card>
     </div>
   );

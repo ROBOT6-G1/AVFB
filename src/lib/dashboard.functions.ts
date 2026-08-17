@@ -361,3 +361,11 @@ export const replyAllPendingMessages = createServerFn({ method: "POST" })
     const { replyAllPendingForUser } = await import("@/lib/ai-engine.server");
     return await replyAllPendingForUser(context.userId);
   });
+
+export const scanAndReplyCommentsNow = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .handler(async ({ context }) => {
+    const { scanAndReplyCommentsForUser } = await import("@/lib/ai-engine.server");
+    return await scanAndReplyCommentsForUser(context.userId);
+  });
+

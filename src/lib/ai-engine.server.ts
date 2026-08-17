@@ -2114,3 +2114,40 @@ export async function scanAndReplyCommentsForUser(userId: string): Promise<{
 
   return { scanned, replied, errors, details };
 }
+
+/** Scan comments for all connected users' pages: used by background cron. */
+export async function scanAndReplyCommentsForAllUsers(): Promise<{
+  users: number;
+  scanned: number;
+  replied: number;
+  errors: number;
+}> {
+  const { data: pages } = await supabaseAdmin
+    .from("facebook_pages")
+    .select("user_id")
+    .eq("is_connected", true);
+  const userIds = [...new Set((pages ?? []).map((p) => p.user_id).filter(Boolean))] as string[];
+
+  let scanned = 0;
+  let replied = 0;
+  let errors = 0;
+  for (const uid of userIds) {
+    try {
+      const { data: settings } = await supabaseAdmin
+        .from("settings")
+        .select("auto_reply_comments")
+        .eq("user_id", uid)
+        .maybeSingle();
+      if (!(settings?.auto_reply_comments ?? true)) continue;
+      const res = await scanAndReplyCommentsForUser(uid);
+      scanned += res.scanned;
+      replied += res.replied;
+      errors += res.errors;
+    } catch (e) {
+      console.error("[scanAndReplyCommentsForAllUsers]", uid, e);
+      errors++;
+    }
+  }
+  return { users: userIds.length, scanned, replied, errors };
+}
+
