@@ -1178,7 +1178,7 @@ export async function getMessengerImageSource(
   return { publicUrl: null, buffer: null, mimeType, filename };
 }
 
-/** Send a single image attachment via Messenger. Supports Public URLs + fast binary FormData fallback. */
+/** Send a single image attachment via Messenger. Supports fast binary FormData upload with URL fallback. */
 async function sendMessengerImage(
   pageToken: string,
   recipientId: string,
@@ -1187,7 +1187,37 @@ async function sendMessengerImage(
 ) {
   const source = await getMessengerImageSource(rawUrlOrPath, imageId);
 
-  // Strategy A: If we have a verified public URL on internet (e.g. Supabase Signed URL), try standard URL payload
+  // Strategy A: Direct Multipart Binary Upload via Blob (Works 100% reliably in server environments)
+  if (source.buffer && source.buffer.length > 0) {
+    try {
+      const blob = new Blob([source.buffer], { type: source.mimeType });
+      const form = new FormData();
+      form.append("recipient", JSON.stringify({ id: recipientId }));
+      form.append("message", JSON.stringify({ attachment: { type: "image", payload: {} } }));
+      form.append("filedata", blob, source.filename);
+      form.append("messaging_type", "RESPONSE");
+
+      const res = await fetch(
+        `https://graph.facebook.com/v21.0/me/messages?access_token=${pageToken}`,
+        {
+          method: "POST",
+          body: form,
+        },
+      );
+
+      if (res.ok) {
+        console.log(`[sendMessengerImage] Sent binary image successfully (${source.buffer.length} bytes, ${source.mimeType})`);
+        return;
+      }
+
+      const errText = await res.text();
+      console.warn(`[sendMessengerImage:binary] Facebook API error ${res.status}: ${errText}, trying public URL...`);
+    } catch (binErr) {
+      console.warn("[sendMessengerImage:binary] Upload error:", binErr);
+    }
+  }
+
+  // Strategy B: Standard URL payload fallback
   if (source.publicUrl) {
     try {
       const res = await fetch(
@@ -1200,7 +1230,7 @@ async function sendMessengerImage(
             message: {
               attachment: {
                 type: "image",
-                payload: { url: source.publicUrl, is_reusable: false },
+                payload: { url: source.publicUrl },
               },
             },
             messaging_type: "RESPONSE",
@@ -1213,45 +1243,13 @@ async function sendMessengerImage(
         return;
       }
       const errText = await res.text();
-      console.warn(`[sendMessengerImage:url] failed (${res.status}): ${errText.slice(0, 180)}, trying binary upload...`);
+      console.error(`[sendMessengerImage:url] Facebook API error (${res.status}): ${errText}`);
     } catch (urlErr) {
-      console.warn("[sendMessengerImage:url] network error:", urlErr);
+      console.error("[sendMessengerImage:url] network error:", urlErr);
     }
   }
 
-  // Strategy B: Multipart Binary Upload directly from Buffer
-  if (source.buffer && source.buffer.length > 0) {
-    try {
-      const file = new File([source.buffer], source.filename, { type: source.mimeType });
-      const form = new FormData();
-      form.append("recipient", JSON.stringify({ id: recipientId }));
-      form.append("message", JSON.stringify({ attachment: { type: "image", payload: { is_reusable: false } } }));
-      form.append("filedata", file);
-      form.append("messaging_type", "RESPONSE");
-
-      const res = await fetch(
-        `https://graph.facebook.com/v21.0/me/messages?access_token=${pageToken}`,
-        {
-          method: "POST",
-          body: form,
-        },
-      );
-
-      if (res.ok) {
-        console.log(`[sendMessengerImage] Sent successfully via binary FormData (${source.buffer.length} bytes, ${source.mimeType})`);
-        return;
-      }
-
-      const errText = await res.text();
-      console.error(`[sendMessengerImage:binary] Facebook API error ${res.status}: ${errText}`);
-      throw new Error(`Messenger image binary upload failed (${res.status}): ${errText.slice(0, 200)}`);
-    } catch (binErr) {
-      console.error("[sendMessengerImage:binary] Upload error:", binErr);
-      throw binErr;
-    }
-  }
-
-  throw new Error(`Unable to load image binary or public URL for image: ${rawUrlOrPath}`);
+  throw new Error(`Unable to send Messenger image for: ${rawUrlOrPath}`);
 }
 
 const recentMidCache = new Map<string, number>();
@@ -1431,18 +1429,36 @@ async function sendProductImagesForClient(
 
   let product: any = null;
   const target = normalizeName(cleanParam);
-  if (target) {
+  const genericWords = new Set(["sary", "sarin", "photo", "photos", "image", "images", "apercu", "voir", "jereo", "produit", "produits", "all", "galerie", ""]);
+  const isGeneric = !target || genericWords.has(target);
+
+  if (!isGeneric && target) {
     product =
       prods.find((p: any) => p.id === cleanParam || normalizeName(p.name) === target) ??
       prods.find(
         (p: any) => normalizeName(p.name).includes(target) || target.includes(normalizeName(p.name)),
       );
   }
-  if (!product) {
-    product = prods[0];
+
+  // If matched product has no images or target was generic, find first product with images
+  if (!product || !Array.isArray(product.product_images) || product.product_images.length === 0) {
+    product = prods.find((p: any) => Array.isArray(p.product_images) && p.product_images.length > 0) || prods[0];
   }
 
-  const images = (product.product_images ?? []).sort((a: any, b: any) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
+  let images = (product.product_images ?? []).sort((a: any, b: any) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
+
+  // Absolute fallback: query product_images directly for this user
+  if (!images || images.length === 0) {
+    const { data: directImgs } = await supabaseAdmin
+      .from("product_images")
+      .select("id, image_path")
+      .eq("user_id", userId)
+      .limit(10);
+    if (directImgs && directImgs.length > 0) {
+      images = directImgs;
+    }
+  }
+
   if (!images || images.length === 0) return { sent: 0, note: "no-images" };
 
   // Read offset from client_ia_state
@@ -1454,11 +1470,13 @@ async function sendProductImagesForClient(
     .eq("client_fb_id", senderId)
     .maybeSingle();
   const offsets = ((state as any)?.product_image_offsets ?? {}) as Record<string, number>;
-  let offset = offsets[product.id] ?? 0;
+  let offset = offsets[product.id || "default"] ?? 0;
   if (offset >= images.length) {
     offset = 0;
   }
-  const batch = images.slice(offset, offset + 4);
+
+  // Send 1 image per request for maximum stability & no rate limits
+  const batch = images.slice(offset, offset + 1);
   if (batch.length === 0) return { sent: 0, note: "already-sent-all" };
 
   let sent = 0;
@@ -1472,7 +1490,7 @@ async function sendProductImagesForClient(
           user_id: userId,
           page_id: pageId,
           sender_id: senderId,
-          content: `[Sary : ${product.name}]`,
+          content: `[Sary : ${product.name || "Produit"}]`,
           media_type: "image",
           media_url: resolvePublicImageUrl(img.image_path, img.id),
           direction: OUTGOING_DIRECTION,
@@ -1480,13 +1498,12 @@ async function sendProductImagesForClient(
         },
         "image-sent",
       );
-      await new Promise((r) => setTimeout(r, 350));
     } catch (e) {
       console.error("[sendProductImagesForClient batch]", e);
     }
   }
 
-  const newOffsets = { ...offsets, [product.id]: offset + sent };
+  const newOffsets = { ...offsets, [product.id || "default"]: offset + sent };
   await supabaseAdmin.from("client_ia_state").upsert(
     {
       user_id: userId,
@@ -1497,7 +1514,7 @@ async function sendProductImagesForClient(
     { onConflict: "user_id,page_id,client_fb_id" },
   );
 
-  return { sent, note: `batch:${sent}/${images.length - offset}` };
+  return { sent, note: `batch:${sent}/${images.length}` };
 }
 
 /** Process AI actions extracted from a Messenger reply, send standalone images first, then return the cleaned text. */
