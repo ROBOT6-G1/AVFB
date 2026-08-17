@@ -12,16 +12,13 @@ export const getSupabaseAuthUrl = createServerFn({ method: "POST" })
   .handler(async ({ data }) => {
     const mode = data.mode || "connect";
     const uid = data.userId || "anonymous";
-    const state = `${mode}:${uid}:${Date.now()}`;
+    const clientOrigin = data.redirectUri ? new URL(data.redirectUri).origin : "";
+    const state = `${mode}:${uid}:${Date.now()}:${encodeURIComponent(clientOrigin)}`;
 
-    let redirectUri = data.redirectUri || "";
-    // If incoming redirectUri contains aistudio.google.com or is empty, use the actual container APP_URL
-    if (!redirectUri || redirectUri.includes("aistudio.google.com")) {
-      const base =
-        process.env.APP_URL ||
-        "https://ais-dev-i7b5jeeh6qqkeyb3nv4dw4-469517843202.europe-west2.run.app";
-      redirectUri = `${base}/api/public/supabase/callback`;
-    }
+    // Use registered canonical callback URL so Supabase API never rejects with "redirect_uri not allowed"
+    const redirectUri =
+      process.env.SUPABASE_OAUTH_REDIRECT_URI ||
+      "https://ais-dev-i7b5jeeh6qqkeyb3nv4dw4-469517843202.europe-west2.run.app/api/public/supabase/callback";
 
     const url = getSupabaseOAuthAuthorizeUrl(redirectUri, state);
     return { url, redirectUri };

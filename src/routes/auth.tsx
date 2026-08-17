@@ -21,48 +21,7 @@ function AuthPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
-
-  // States for Supabase Direct modal
-  const [showDirectModal, setShowDirectModal] = useState(false);
-  const [sbProjectUrl, setSbProjectUrl] = useState("");
-  const [sbAnonKey, setSbAnonKey] = useState("");
-  const [sbDirectLoading, setSbDirectLoading] = useState(false);
   const [supabaseLoading, setSupabaseLoading] = useState(false);
-
-  const handleDirectSupabaseSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!sbProjectUrl || !sbAnonKey) {
-      toast.error("Veuillez remplir l'URL et la clé Supabase");
-      return;
-    }
-    setSbDirectLoading(true);
-    try {
-      const cleanUrl = sbProjectUrl.trim().replace(/\/$/, "");
-      const projectRef = cleanUrl.replace(/^https?:\/\//, "").split(".")[0] || "supabase_user";
-      const userId = `sb_${projectRef.slice(0, 24)}`;
-      const userEmail = `admin@${projectRef}.supabase.co`;
-
-      const header = btoa(JSON.stringify({ alg: "HS256", typ: "JWT" }));
-      const payload = btoa(JSON.stringify({ sub: userId, email: userEmail }));
-      const sessionToken = `${header}.${payload}.direct_key`;
-      const sessionUser = { uid: userId, email: userEmail, token: sessionToken };
-
-      localStorage.setItem("agence_virtuelle_user_session", JSON.stringify(sessionUser));
-      localStorage.setItem("agence_virtuelle_custom_supabase_url", cleanUrl);
-      localStorage.setItem("agence_virtuelle_custom_supabase_key", sbAnonKey.trim());
-      
-      window.dispatchEvent(new Event("storage"));
-      window.dispatchEvent(new Event("agence_virtuelle_auth_change"));
-
-      toast.success("Connecté à votre projet Supabase avec succès !");
-      setShowDirectModal(false);
-      navigate({ to: "/dashboard" });
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Erreur de connexion");
-    } finally {
-      setSbDirectLoading(false);
-    }
-  };
 
   useEffect(() => {
     const checkExisting = async () => {
@@ -252,35 +211,26 @@ function AuthPage() {
               <div className="w-full border-t border-border" />
             </div>
             <div className="relative flex justify-center text-xs uppercase">
-              <span className="bg-card px-2 text-muted-foreground">Méthodes alternatives</span>
+              <span className="bg-card px-2 text-muted-foreground">Ou via Supabase</span>
             </div>
           </div>
 
-          <div className="space-y-3">
+          <div>
             <Button
               variant="outline"
-              className="w-full bg-[#1c1c1c] hover:bg-[#282828] text-white border-emerald-500/30 hover:border-emerald-500/60 transition-all flex items-center justify-center gap-2"
-              onClick={() => setShowDirectModal(true)}
-              type="button"
-            >
-              🔑 Connexion Directe Supabase (URL + Clé API)
-            </Button>
-
-            <Button
-              variant="ghost"
-              size="sm"
-              className="w-full text-xs text-muted-foreground hover:text-foreground"
+              className="w-full bg-[#1c1c1c] hover:bg-[#282828] text-white border-emerald-500/30 hover:border-emerald-500/60 transition-all flex items-center justify-center gap-2 py-5 font-semibold"
               onClick={handleSupabaseOAuth}
               disabled={loading || supabaseLoading}
+              type="button"
             >
               {supabaseLoading ? (
-                <Loader2 className="h-3 w-3 mr-1 animate-spin text-emerald-400" />
+                <Loader2 className="h-4 w-4 mr-2 animate-spin text-emerald-400" />
               ) : (
-                <svg className="h-3 w-3 mr-1 text-emerald-400" viewBox="0 0 24 24" fill="currentColor">
+                <svg className="h-5 w-5 text-emerald-400" viewBox="0 0 24 24" fill="currentColor">
                   <path d="M21.362 9.354H12V.343a.343.343 0 0 0-.583-.244L.367 11.15a.343.343 0 0 0 .243.585h9.39v9.011a.343.343 0 0 0 .584.244l11.05-11.051a.343.343 0 0 0-.272-.585z" />
                 </svg>
               )}
-              OAuth Supabase Cloud
+              Continuer avec Supabase Auth
             </Button>
           </div>
         </Card>
@@ -291,55 +241,6 @@ function AuthPage() {
           </Link>
         </p>
       </div>
-
-      {showDirectModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm p-4">
-          <Card className="w-full max-w-md p-6 relative animate-in fade-in zoom-in duration-200 border-emerald-500/30">
-            <h2 className="text-xl font-bold mb-2 text-foreground">Connexion Directe Supabase</h2>
-            <p className="text-xs text-muted-foreground mb-4">
-              Saisissez directement l'URL de votre projet et votre clé publique (Anon Key) pour vous connecter immédiatement sans redirection :
-            </p>
-            <form onSubmit={handleDirectSupabaseSubmit} className="space-y-4">
-              <div>
-                <Label htmlFor="sb-url">Supabase Project URL</Label>
-                <Input
-                  id="sb-url"
-                  type="url"
-                  required
-                  value={sbProjectUrl}
-                  onChange={(e) => setSbProjectUrl(e.target.value)}
-                  placeholder="https://xyzcompany.supabase.co"
-                />
-              </div>
-              <div>
-                <Label htmlFor="sb-key">Supabase Anon Key</Label>
-                <Input
-                  id="sb-key"
-                  type="password"
-                  required
-                  value={sbAnonKey}
-                  onChange={(e) => setSbAnonKey(e.target.value)}
-                  placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6..."
-                />
-              </div>
-              <div className="flex justify-end gap-2 pt-2">
-                <Button
-                  type="button"
-                  variant="ghost"
-                  onClick={() => setShowDirectModal(false)}
-                  disabled={sbDirectLoading}
-                >
-                  Annuler
-                </Button>
-                <Button type="submit" disabled={sbDirectLoading} className="bg-emerald-600 hover:bg-emerald-500 text-white">
-                  {sbDirectLoading && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-                  Se Connecter
-                </Button>
-              </div>
-            </form>
-          </Card>
-        </div>
-      )}
     </div>
   );
 }
