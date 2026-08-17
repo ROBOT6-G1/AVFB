@@ -8,15 +8,7 @@
   "crons": [
     {
       "path": "/api/public/hooks/cron",
-      "schedule": "* * * * *"
-    },
-    {
-      "path": "/api/public/hooks/reply-all-messages",
-      "schedule": "* * * * *"
-    },
-    {
-      "path": "/api/public/hooks/publish-scheduled-posts",
-      "schedule": "* * * * *"
+      "schedule": "0 12 * * *"
     }
   ]
 }
