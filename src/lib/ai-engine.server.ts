@@ -26,10 +26,11 @@ async function insertMessageLog(payload: any, label: string) {
 
 /** Sanitize response: strip markdown but PRESERVE URLs exactly (including _ - . chars). */
 export function sanitizeReply(text: string, allowLinks = false): string {
+  const safeText = typeof text === "string" ? text : String(text ?? "");
   // 1. Extract URLs first so replacements below never touch them.
   const urlRegex = /(https?:\/\/[^\s<>()"']+|www\.[^\s<>()"']+)/gi;
   const urls: string[] = [];
-  let t = text.replace(urlRegex, (m) => {
+  let t = safeText.replace(urlRegex, (m) => {
     urls.push(m);
     return `\u0000URL${urls.length - 1}\u0000`;
   });
@@ -52,7 +53,8 @@ export function sanitizeReply(text: string, allowLinks = false): string {
 }
 
 export function containsLink(text: string): boolean {
-  return /(https?:\/\/|www\.)/i.test(text);
+  const safeText = typeof text === "string" ? text : String(text ?? "");
+  return /(https?:\/\/|www\.)/i.test(safeText);
 }
 
 function getTextFromParts(parts: AiPart[]): string {
@@ -133,7 +135,8 @@ async function retryTruncatedReply(opts: {
 }
 
 export function splitMessengerText(text: string, maxLength = MESSENGER_TEXT_LIMIT): string[] {
-  const normalized = text.replace(/\r/g, "").trim();
+  const safeText = typeof text === "string" ? text : String(text ?? "");
+  const normalized = safeText.replace(/\r/g, "").trim();
   if (!normalized) return [];
   if (normalized.length <= maxLength) return [normalized];
 
@@ -974,7 +977,7 @@ async function fetchMessengerHistoryForReply(
 ): Promise<ChatTurn[]> {
   const dbHistory = await fetchMessengerHistory(page.user_id, page.page_id, senderId, limit);
   const graphHistory = await fetchGraphMessengerHistory(page, senderId, limit + 1);
-  const current = currentText.trim();
+  const current = (currentText || "").trim();
   const graphWithoutCurrent =
     current && graphHistory.at(-1)?.role === "user" && graphHistory.at(-1)?.text.trim() === current
       ? graphHistory.slice(0, -1)
@@ -1279,9 +1282,10 @@ export function extractAiActions(text: string): {
   orders: any[];
   imageRequests: string[];
 } {
+  const safeText = typeof text === "string" ? text : String(text ?? "");
   const orders: any[] = [];
   const imageRequests: string[] = [];
-  let cleaned = text;
+  let cleaned = safeText;
 
   cleaned = cleaned.replace(/\[\[?\s*ORDER:\s*(\{[\s\S]*?\})\s*\]\]?/gi, (_, json) => {
     try {
@@ -2031,13 +2035,14 @@ export async function replyAllPendingForUser(
           allowLinks: true,
         });
         const rawReply = reply || "Misaotra tamin'ny hafatrao. Handray anao tsy ho ela izahay.";
-        const finalReply = await processAiActionsForMessenger({
+        const { cleanText: finalReply } = await processAiActionsForMessenger({
           userId,
           pageId: page.page_id,
           pageToken: page.page_access_token,
           senderId: p.senderId,
           senderName: p.senderName,
           rawReply,
+          userMessageText: p.lastText,
         });
         if (finalReply) await sendMessengerReply(page.page_access_token, p.senderId, finalReply);
         await insertMessageLog(
