@@ -29,7 +29,7 @@ export async function runBackgroundWorkerTick(): Promise<{
     try {
       const { replyAllPendingForAllUsers } = await import("@/lib/ai-engine.server");
       messagesResult = await replyAllPendingForAllUsers();
-      if (messagesResult && (messagesResult.processed > 0 || messagesResult.replied > 0)) {
+      if (messagesResult && (messagesResult.processed > 0 || messagesResult.replied > 0 || messagesResult.errors > 0)) {
         console.log("[background-worker] Messenger auto-replies:", messagesResult);
       }
     } catch (e) {
@@ -75,7 +75,7 @@ export async function runBackgroundWorkerTick(): Promise<{
     try {
       const { scanAndReplyCommentsForAllUsers } = await import("@/lib/ai-engine.server");
       commentsResult = await scanAndReplyCommentsForAllUsers();
-      if (commentsResult && (commentsResult.scanned > 0 || commentsResult.replied > 0)) {
+      if (commentsResult && (commentsResult.replied > 0 || commentsResult.errors > 0)) {
         console.log("[background-worker] Comments auto-replies:", commentsResult);
       }
     } catch (e) {

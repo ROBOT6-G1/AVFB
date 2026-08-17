@@ -1,5 +1,7 @@
 // Server-only AI engine: Lovable AI par défaut + rotation Gemini en fallback.
 import { supabaseAdmin } from "@/integrations/supabase/client.server";
+import fs from "fs";
+import path from "path";
 
 const GEMINI_MODEL = "gemini-2.5-flash";
 const LOVABLE_MODEL = "google/gemini-2.5-flash";
@@ -1023,17 +1025,167 @@ function resolvePublicImageUrl(imagePathOrId: string, imageId?: string): string 
   return `${APP_BASE_URL}/api/public/img?path=${encodeURIComponent(imagePathOrId)}`;
 }
 
-/** Send a single image attachment via Messenger. Supports Public URLs with fast Facebook download + binary multipart fallback. */
+function tryParseUrl(u: string): URL | null {
+  try {
+    return new URL(u);
+  } catch {
+    return null;
+  }
+}
+
+export async function getMessengerImageSource(
+  rawUrlOrPath: string,
+  imageId?: string,
+): Promise<{
+  publicUrl: string | null;
+  buffer: Buffer | null;
+  mimeType: string;
+  filename: string;
+}> {
+  let target = rawUrlOrPath;
+  let mimeType = "image/jpeg";
+  let filename = "image.jpg";
+
+  // 0. If imageId is provided, fetch image_path from product_images
+  if (imageId) {
+    const { data: imgRow } = await supabaseAdmin
+      .from("product_images")
+      .select("image_path")
+      .eq("id", imageId)
+      .maybeSingle();
+    if (imgRow?.image_path) {
+      target = imgRow.image_path;
+    }
+  }
+
+  if (!target) {
+    return { publicUrl: null, buffer: null, mimeType, filename };
+  }
+
+  // 1. Data URL (Base64)
+  if (target.startsWith("data:image/") || target.startsWith("data:application/")) {
+    const parsed = stripDataUrl(target);
+    if (parsed) {
+      const buffer = Buffer.from(parsed.base64, "base64");
+      mimeType = parsed.mime || "image/jpeg";
+      const ext = mimeType.includes("png") ? "png" : mimeType.includes("webp") ? "webp" : "jpg";
+      filename = `image.${ext}`;
+      return { publicUrl: null, buffer, mimeType, filename };
+    }
+  }
+
+  // 2. Local Filesystem check (handles local uploads in public/uploads/ or public/)
+  const parsedUrl = target.startsWith("http://") || target.startsWith("https://") ? tryParseUrl(target) : null;
+  const urlPathname = parsedUrl ? parsedUrl.pathname : target;
+  const cleanPath = urlPathname.replace(/^\/+/, "");
+  const baseName = path.basename(cleanPath);
+
+  const possibleLocalPaths = [
+    path.join(process.cwd(), "public", "uploads", baseName),
+    path.join(process.cwd(), "public", cleanPath.replace(/^public\//, "")),
+    path.join(process.cwd(), cleanPath),
+  ];
+
+  for (const p of possibleLocalPaths) {
+    if (fs.existsSync(p) && fs.statSync(p).isFile()) {
+      try {
+        const buffer = fs.readFileSync(p);
+        const ext = path.extname(p).toLowerCase();
+        mimeType =
+          ext === ".png"
+            ? "image/png"
+            : ext === ".webp"
+              ? "image/webp"
+              : ext === ".gif"
+                ? "image/gif"
+                : "image/jpeg";
+        filename = baseName || `image${ext || ".jpg"}`;
+        return { publicUrl: null, buffer, mimeType, filename };
+      } catch (fsErr) {
+        console.warn("[getMessengerImageSource] local read error:", fsErr);
+      }
+    }
+  }
+
+  // 3. Supabase Storage (path or URL)
+  try {
+    let bucketPath = target;
+    if (target.includes("/storage/v1/object/public/product-images/")) {
+      bucketPath = target.split("/storage/v1/object/public/product-images/")[1] || target;
+    } else if (target.includes("/storage/v1/object/sign/product-images/")) {
+      bucketPath = target.split("/storage/v1/object/sign/product-images/")[1]?.split("?")[0] || target;
+    }
+
+    const { data: signed } = await supabaseAdmin.storage
+      .from("product-images")
+      .createSignedUrl(bucketPath, 3600);
+
+    const { data: stBlob } = await supabaseAdmin.storage
+      .from("product-images")
+      .download(bucketPath);
+
+    let buffer: Buffer | null = null;
+    if (stBlob) {
+      const arrayBuf = await stBlob.arrayBuffer();
+      buffer = Buffer.from(arrayBuf);
+      mimeType = stBlob.type || "image/jpeg";
+      const ext = mimeType.includes("png") ? "png" : "jpg";
+      filename = `product.${ext}`;
+    }
+
+    if (signed?.signedUrl || buffer) {
+      return {
+        publicUrl: signed?.signedUrl || null,
+        buffer,
+        mimeType,
+        filename,
+      };
+    }
+  } catch (stErr) {
+    console.warn("[getMessengerImageSource] Supabase Storage error:", stErr);
+  }
+
+  // 4. Remote HTTP/HTTPS URL
+  if (target.startsWith("http://") || target.startsWith("https://")) {
+    const isDevUrl = target.includes("localhost") || target.includes("ais-dev") || target.includes("ais-pre");
+    let publicUrl = isDevUrl ? null : target;
+
+    try {
+      const res = await fetch(target);
+      if (res.ok) {
+        const ct = res.headers.get("content-type") || "";
+        if (ct.startsWith("image/")) {
+          const arrayBuf = await res.arrayBuffer();
+          const buffer = Buffer.from(arrayBuf);
+          mimeType = ct;
+          const ext = ct.includes("png") ? "png" : ct.includes("webp") ? "webp" : "jpg";
+          filename = baseName || `image.${ext}`;
+          return { publicUrl, buffer, mimeType, filename };
+        }
+      }
+    } catch (e) {
+      console.warn("[getMessengerImageSource] remote fetch failed:", e);
+    }
+
+    if (publicUrl) {
+      return { publicUrl, buffer: null, mimeType, filename };
+    }
+  }
+
+  return { publicUrl: null, buffer: null, mimeType, filename };
+}
+
+/** Send a single image attachment via Messenger. Supports Public URLs + fast binary FormData fallback. */
 async function sendMessengerImage(
   pageToken: string,
   recipientId: string,
   rawUrlOrPath: string,
   imageId?: string,
 ) {
-  const publicUrl = resolvePublicImageUrl(rawUrlOrPath, imageId);
+  const source = await getMessengerImageSource(rawUrlOrPath, imageId);
 
-  // 1. Primary Strategy: Facebook standard JSON payload with public URL
-  if (publicUrl.startsWith("http://") || publicUrl.startsWith("https://")) {
+  // Strategy A: If we have a verified public URL on internet (e.g. Supabase Signed URL), try standard URL payload
+  if (source.publicUrl) {
     try {
       const res = await fetch(
         `https://graph.facebook.com/v21.0/me/messages?access_token=${pageToken}`,
@@ -1045,7 +1197,7 @@ async function sendMessengerImage(
             message: {
               attachment: {
                 type: "image",
-                payload: { url: publicUrl, is_reusable: false },
+                payload: { url: source.publicUrl, is_reusable: false },
               },
             },
             messaging_type: "RESPONSE",
@@ -1054,81 +1206,24 @@ async function sendMessengerImage(
       );
 
       if (res.ok) {
-        return; // Succeeded!
+        console.log("[sendMessengerImage] Sent successfully via public URL payload");
+        return;
       }
       const errText = await res.text();
-      console.warn(
-        `[sendMessengerImage:url] failed (${res.status}): ${errText.slice(0, 180)}, trying fallback...`,
-      );
+      console.warn(`[sendMessengerImage:url] failed (${res.status}): ${errText.slice(0, 180)}, trying binary upload...`);
     } catch (urlErr) {
       console.warn("[sendMessengerImage:url] network error:", urlErr);
     }
   }
 
-  // 2. Secondary Strategy: Multipart Binary FormData upload
-  try {
-    let blob: Blob | null = null;
-    let filename = "image.jpg";
-    let mimeType = "image/jpeg";
-
-    if (rawUrlOrPath.startsWith("data:image/") || rawUrlOrPath.startsWith("data:application/")) {
-      const parsed = stripDataUrl(rawUrlOrPath);
-      if (parsed) {
-        const bytes = Uint8Array.from(atob(parsed.base64), (c) => c.charCodeAt(0));
-        mimeType = parsed.mime || "image/jpeg";
-        blob = new Blob([bytes], { type: mimeType });
-        filename = mimeType.includes("png") ? "image.png" : "image.jpg";
-      }
-    } else if (rawUrlOrPath.startsWith("http://") || rawUrlOrPath.startsWith("https://")) {
-      const r = await fetch(rawUrlOrPath);
-      if (r.ok) {
-        const ct = r.headers.get("content-type") || "image/jpeg";
-        const buf = await r.arrayBuffer();
-        blob = new Blob([buf], { type: ct });
-        mimeType = ct;
-        filename = ct.includes("png") ? "image.png" : "image.jpg";
-      }
-    } else {
-      // 2a. Try Supabase storage download
-      try {
-        const { data: stBlob } = await supabaseAdmin.storage
-          .from("product-images")
-          .download(rawUrlOrPath);
-        if (stBlob) {
-          blob = stBlob;
-          mimeType = stBlob.type || "image/jpeg";
-          filename = "product.jpg";
-        }
-      } catch {}
-
-      // 2b. Try local filesystem
-      if (!blob) {
-        const fs = await import("fs");
-        const path = await import("path");
-        const cleanPath = rawUrlOrPath.replace(/^\/+/, "");
-        const possiblePaths = [
-          path.join(process.cwd(), "public", cleanPath.replace(/^public\//, "")),
-          path.join(process.cwd(), cleanPath),
-          path.join(process.cwd(), "public", "uploads", path.basename(rawUrlOrPath)),
-        ];
-        for (const p of possiblePaths) {
-          if (fs.existsSync(p)) {
-            const buf = fs.readFileSync(p);
-            const ext = path.extname(p).toLowerCase();
-            mimeType = ext === ".png" ? "image/png" : ext === ".webp" ? "image/webp" : "image/jpeg";
-            blob = new Blob([buf], { type: mimeType });
-            filename = path.basename(p);
-            break;
-          }
-        }
-      }
-    }
-
-    if (blob) {
+  // Strategy B: Multipart Binary Upload directly from Buffer
+  if (source.buffer && source.buffer.length > 0) {
+    try {
+      const file = new File([source.buffer], source.filename, { type: source.mimeType });
       const form = new FormData();
       form.append("recipient", JSON.stringify({ id: recipientId }));
       form.append("message", JSON.stringify({ attachment: { type: "image", payload: { is_reusable: false } } }));
-      form.append("filedata", blob, filename);
+      form.append("filedata", file);
       form.append("messaging_type", "RESPONSE");
 
       const res = await fetch(
@@ -1139,17 +1234,21 @@ async function sendMessengerImage(
         },
       );
 
-      if (!res.ok) {
-        const errText = await res.text();
-        console.error(`[sendMessengerImage:binary] failed: ${res.status} - ${errText}`);
-        throw new Error(`Messenger image upload ${res.status}: ${errText.slice(0, 200)}`);
+      if (res.ok) {
+        console.log(`[sendMessengerImage] Sent successfully via binary FormData (${source.buffer.length} bytes, ${source.mimeType})`);
+        return;
       }
-      return;
+
+      const errText = await res.text();
+      console.error(`[sendMessengerImage:binary] Facebook API error ${res.status}: ${errText}`);
+      throw new Error(`Messenger image binary upload failed (${res.status}): ${errText.slice(0, 200)}`);
+    } catch (binErr) {
+      console.error("[sendMessengerImage:binary] Upload error:", binErr);
+      throw binErr;
     }
-  } catch (binErr) {
-    console.error("[sendMessengerImage] binary fallback failed:", binErr);
-    throw binErr;
   }
+
+  throw new Error(`Unable to load image binary or public URL for image: ${rawUrlOrPath}`);
 }
 
 const recentMidCache = new Map<string, number>();
