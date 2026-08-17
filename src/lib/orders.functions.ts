@@ -10,6 +10,7 @@ export const listOrders = createServerFn({ method: "POST" })
       .from("orders")
       .select("*, trainings(name), products(name, stock)")
       .eq("type", data.type)
+      .eq("user_id", context.userId)
       .order("created_at", { ascending: false });
     if (error) throw new Error(error.message);
     return rows ?? [];
@@ -65,6 +66,7 @@ export const updateOrderStatus = createServerFn({ method: "POST" })
       .from("orders")
       .update({ status: data.status })
       .eq("id", data.id)
+      .eq("user_id", context.userId)
       .select("*")
       .single();
     if (error) throw new Error(error.message);
@@ -78,12 +80,14 @@ export const updateOrderStatus = createServerFn({ method: "POST" })
         .from("products")
         .select("stock")
         .eq("id", order.product_id)
+        .eq("user_id", context.userId)
         .maybeSingle();
       if (prod && prod.stock >= (order.quantity ?? 1)) {
         await context.supabase
           .from("products")
           .update({ stock: prod.stock - (order.quantity ?? 1) })
-          .eq("id", order.product_id);
+          .eq("id", order.product_id)
+          .eq("user_id", context.userId);
       }
     }
     return { ok: true };
@@ -93,7 +97,11 @@ export const deleteOrder = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d: unknown) => z.object({ id: z.string().uuid() }).parse(d))
   .handler(async ({ data, context }) => {
-    const { error } = await context.supabase.from("orders").delete().eq("id", data.id);
+    const { error } = await context.supabase
+      .from("orders")
+      .delete()
+      .eq("id", data.id)
+      .eq("user_id", context.userId);
     if (error) throw new Error(error.message);
     return { ok: true };
   });

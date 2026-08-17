@@ -8,6 +8,7 @@ export const listPaymentMethods = createServerFn({ method: "GET" })
     const { data, error } = await context.supabase
       .from("payment_methods")
       .select("*")
+      .eq("user_id", context.userId)
       .order("created_at", { ascending: true });
     if (error) throw new Error(error.message);
     return data ?? [];
@@ -44,7 +45,11 @@ export const deletePaymentMethod = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d: unknown) => z.object({ id: z.string().uuid() }).parse(d))
   .handler(async ({ data, context }) => {
-    const { error } = await context.supabase.from("payment_methods").delete().eq("id", data.id);
+    const { error } = await context.supabase
+      .from("payment_methods")
+      .delete()
+      .eq("id", data.id)
+      .eq("user_id", context.userId);
     if (error) throw new Error(error.message);
     return { ok: true };
   });

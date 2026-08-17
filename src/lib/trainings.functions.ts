@@ -1,6 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { z } from "zod";
+import { uploadMediaFile } from "@/lib/storage-helper.server";
 
 export const listTrainings = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
@@ -8,6 +9,7 @@ export const listTrainings = createServerFn({ method: "GET" })
     const { data, error } = await context.supabase
       .from("trainings")
       .select("*, training_files(*)")
+      .eq("user_id", context.userId)
       .order("created_at", { ascending: false });
     if (error) throw new Error(error.message);
     return data ?? [];
@@ -45,6 +47,7 @@ export const upsertTraining = createServerFn({ method: "POST" })
         .from("trainings")
         .update(payload)
         .eq("id", cleanId)
+        .eq("user_id", context.userId)
         .select()
         .single();
     } else {
@@ -62,7 +65,11 @@ export const deleteTraining = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d: unknown) => z.object({ id: z.string().uuid() }).parse(d))
   .handler(async ({ data, context }) => {
-    const { error } = await context.supabase.from("trainings").delete().eq("id", data.id);
+    const { error } = await context.supabase
+      .from("trainings")
+      .delete()
+      .eq("id", data.id)
+      .eq("user_id", context.userId);
     if (error) throw new Error(error.message);
     return { ok: true };
   });
@@ -105,23 +112,18 @@ export const uploadTrainingFileServer = createServerFn({ method: "POST" })
 
     if (data.data_base64) {
       const safeName = data.file_name.replace(/[^\w.-]/g, "_");
-      const uniqueName = `${context.userId}/${data.training_id}/${Date.now()}-${crypto.randomUUID()}-${safeName}`;
       const contentType = data.content_type || "application/octet-stream";
-      const bytes = Uint8Array.from(atob(data.data_base64), (c) => c.charCodeAt(0));
+      const buffer = Buffer.from(data.data_base64, "base64");
 
-      finalPath = `data:${contentType};base64,${data.data_base64}`;
-
-      try {
-        const { error: upErr } = await context.supabase.storage
-          .from("training-files")
-          .upload(uniqueName, bytes, { contentType, upsert: true });
-
-        if (!upErr) {
-          finalPath = uniqueName;
-        }
-      } catch (e) {
-        console.warn("[uploadTrainingFileServer] fallback to data url:", e);
-      }
+      // Upload directly to Supabase Storage
+      finalPath = await uploadMediaFile({
+        userId: context.userId,
+        bucket: "training-files",
+        fileName: safeName,
+        contentType,
+        buffer,
+        folder: data.training_id,
+      });
     }
 
     const { error } = await context.supabase.from("training_files").insert({
@@ -134,7 +136,7 @@ export const uploadTrainingFileServer = createServerFn({ method: "POST" })
       user_id: context.userId,
     });
     if (error) throw new Error(error.message);
-    return { ok: true };
+    return { ok: true, file_path: finalPath };
   });
 
 export const deleteTrainingFile = createServerFn({ method: "POST" })
@@ -145,6 +147,7 @@ export const deleteTrainingFile = createServerFn({ method: "POST" })
       .from("training_files")
       .select("file_path")
       .eq("id", data.id)
+      .eq("user_id", context.userId)
       .maybeSingle();
     if (row?.file_path && !row.file_path.startsWith("data:") && !row.file_path.startsWith("http")) {
       try {
@@ -153,7 +156,11 @@ export const deleteTrainingFile = createServerFn({ method: "POST" })
         // ignore
       }
     }
-    const { error } = await context.supabase.from("training_files").delete().eq("id", data.id);
+    const { error } = await context.supabase
+      .from("training_files")
+      .delete()
+      .eq("id", data.id)
+      .eq("user_id", context.userId);
     if (error) throw new Error(error.message);
     return { ok: true };
   });

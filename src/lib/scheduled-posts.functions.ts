@@ -1,6 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { z } from "zod";
+import { uploadMediaFile } from "@/lib/storage-helper.server";
 
 async function ensureBucket(supabase: any, bucketName: string) {
   try {
@@ -22,6 +23,7 @@ export const listScheduledPosts = createServerFn({ method: "GET" })
     const { data, error } = await context.supabase
       .from("scheduled_posts")
       .select("*, facebook_pages(page_name)")
+      .eq("user_id", context.userId)
       .order("scheduled_at", { ascending: true });
     if (error) throw new Error(error.message);
     return data ?? [];
@@ -62,7 +64,8 @@ export const upsertScheduledPost = createServerFn({ method: "POST" })
       const { error } = await context.supabase
         .from("scheduled_posts")
         .update(payload)
-        .eq("id", targetId);
+        .eq("id", targetId)
+        .eq("user_id", context.userId);
       if (error) throw new Error(error.message);
     } else {
       const { data: row, error } = await context.supabase
@@ -87,6 +90,7 @@ export const deleteScheduledPost = createServerFn({ method: "POST" })
       .from("scheduled_posts")
       .select("image_path,image_paths,video_path")
       .eq("id", data.id)
+      .eq("user_id", context.userId)
       .maybeSingle();
     const imgs = [
       ...(((row as any)?.image_paths as string[] | null) ?? []),
@@ -98,7 +102,11 @@ export const deleteScheduledPost = createServerFn({ method: "POST" })
     if ((row as any)?.video_path) {
       await context.supabase.storage.from("post-videos").remove([(row as any).video_path]);
     }
-    const { error } = await context.supabase.from("scheduled_posts").delete().eq("id", data.id);
+    const { error } = await context.supabase
+      .from("scheduled_posts")
+      .delete()
+      .eq("id", data.id)
+      .eq("user_id", context.userId);
     if (error) throw new Error(error.message);
     return { ok: true };
   });
@@ -142,19 +150,19 @@ export const uploadPostImage = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d: unknown) => uploadSchema.parse(d))
   .handler(async ({ data, context }) => {
-    await ensureBucket(context.supabase, "post-images");
     const safeName = data.filename.replace(/[^\w.\-]/g, "_");
-    const path = `${context.userId}/${crypto.randomUUID()}-${safeName}`;
-    const bytes = Uint8Array.from(atob(data.data_base64), (c) => c.charCodeAt(0));
-    const { error: upErr } = await context.supabase.storage
-      .from("post-images")
-      .upload(path, bytes, { contentType: data.content_type, upsert: false });
-    if (upErr) throw new Error(upErr.message);
-    const { data: signed, error: sErr } = await context.supabase.storage
-      .from("post-images")
-      .createSignedUrl(path, 60 * 60 * 24 * 7);
-    if (sErr) throw new Error(sErr.message);
-    return { path, signed_url: signed.signedUrl };
+    const buffer = Buffer.from(data.data_base64, "base64");
+    const contentType = data.content_type || "image/jpeg";
+
+    const publicUrl = await uploadMediaFile({
+      userId: context.userId,
+      bucket: "post-images",
+      fileName: safeName,
+      contentType,
+      buffer,
+    });
+
+    return { path: publicUrl, signed_url: publicUrl };
   });
 
 /* ---------------- Image upload (signed URL direct upload) ---------------- */
@@ -177,6 +185,9 @@ export const getPostImageUrl = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d: unknown) => z.object({ path: z.string() }).parse(d))
   .handler(async ({ data, context }) => {
+    if (data.path.startsWith("http://") || data.path.startsWith("https://")) {
+      return { signed_url: data.path };
+    }
     const { data: signed, error } = await context.supabase.storage
       .from("post-images")
       .createSignedUrl(data.path, 60 * 60 * 24 * 7);

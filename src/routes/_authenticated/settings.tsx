@@ -49,6 +49,8 @@ function SettingsPage() {
   const qc = useQueryClient();
   const [sbConnecting, setSbConnecting] = useState(false);
   const [sbSelecting, setSbSelecting] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [replying, setReplying] = useState(false);
   const [form, setForm] = useState({
     assistance_type: (data as any)?.assistance_type ?? "online_work",
     auto_reply_messages: data?.auto_reply_messages ?? true,

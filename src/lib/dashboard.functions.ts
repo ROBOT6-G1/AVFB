@@ -12,6 +12,7 @@ export const listPrompts = createServerFn({ method: "GET" })
     const { data, error } = await context.supabase
       .from("prompts")
       .select("*")
+      .eq("user_id", context.userId)
       .order("created_at", { ascending: false });
     if (error) throw new Error(error.message);
     return data ?? [];
@@ -54,7 +55,11 @@ export const deletePrompt = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d: unknown) => z.object({ id: z.string().uuid() }).parse(d))
   .handler(async ({ data, context }) => {
-    const { error } = await context.supabase.from("prompts").delete().eq("id", data.id);
+    const { error } = await context.supabase
+      .from("prompts")
+      .delete()
+      .eq("id", data.id)
+      .eq("user_id", context.userId);
     if (error) throw new Error(error.message);
     return { ok: true };
   });
@@ -67,6 +72,7 @@ export const listGeminiKeys = createServerFn({ method: "GET" })
     const { data, error } = await context.supabase
       .from("gemini_keys")
       .select("id,label,is_active,last_used_at,error_count,disabled_until,api_key,created_at")
+      .eq("user_id", context.userId)
       .order("created_at", { ascending: true });
     if (error) throw new Error(error.message);
     // Mask keys
@@ -142,7 +148,11 @@ export const deleteGeminiKey = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d: unknown) => z.object({ id: z.string().uuid() }).parse(d))
   .handler(async ({ data, context }) => {
-    const { error } = await context.supabase.from("gemini_keys").delete().eq("id", data.id);
+    const { error } = await context.supabase
+      .from("gemini_keys")
+      .delete()
+      .eq("id", data.id)
+      .eq("user_id", context.userId);
     if (error) throw new Error(error.message);
     return { ok: true };
   });
@@ -156,7 +166,8 @@ export const toggleGeminiKey = createServerFn({ method: "POST" })
     const { error } = await context.supabase
       .from("gemini_keys")
       .update({ is_active: data.is_active, error_count: 0, disabled_until: null })
-      .eq("id", data.id);
+      .eq("id", data.id)
+      .eq("user_id", context.userId);
     if (error) throw new Error(error.message);
     return { ok: true };
   });
@@ -263,6 +274,7 @@ export const listFacebookPages = createServerFn({ method: "GET" })
     const { data, error } = await context.supabase
       .from("facebook_pages")
       .select("id,page_id,page_name,is_connected,webhook_subscribed,token_expires_at,created_at")
+      .eq("user_id", context.userId)
       .order("created_at", { ascending: false });
     if (error) throw new Error(error.message);
     return data ?? [];
@@ -272,7 +284,11 @@ export const disconnectFacebookPage = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d: unknown) => z.object({ id: z.string().uuid() }).parse(d))
   .handler(async ({ data, context }) => {
-    const { error } = await context.supabase.from("facebook_pages").delete().eq("id", data.id);
+    const { error } = await context.supabase
+      .from("facebook_pages")
+      .delete()
+      .eq("id", data.id)
+      .eq("user_id", context.userId);
     if (error) throw new Error(error.message);
     return { ok: true };
   });
@@ -283,18 +299,24 @@ export const getDashboardStats = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
   .handler(async ({ context }) => {
     const [msgs, comments, keys, pages] = await Promise.all([
-      context.supabase.from("messages_log").select("id", { count: "exact", head: true }),
+      context.supabase
+        .from("messages_log")
+        .select("id", { count: "exact", head: true })
+        .eq("user_id", context.userId),
       context.supabase
         .from("comments_log")
         .select("id", { count: "exact", head: true })
+        .eq("user_id", context.userId)
         .eq("replied", true),
       context.supabase
         .from("gemini_keys")
         .select("id", { count: "exact", head: true })
+        .eq("user_id", context.userId)
         .eq("is_active", true),
       context.supabase
         .from("facebook_pages")
         .select("id", { count: "exact", head: true })
+        .eq("user_id", context.userId)
         .eq("is_connected", true),
     ]);
     return {
@@ -311,6 +333,7 @@ export const listMessagesLog = createServerFn({ method: "GET" })
     const { data, error } = await context.supabase
       .from("messages_log")
       .select("*")
+      .eq("user_id", context.userId)
       .order("created_at", { ascending: false })
       .limit(100);
     if (error) throw new Error(error.message);
@@ -323,6 +346,7 @@ export const listCommentsLog = createServerFn({ method: "GET" })
     const { data, error } = await context.supabase
       .from("comments_log")
       .select("*")
+      .eq("user_id", context.userId)
       .order("created_at", { ascending: false })
       .limit(100);
     if (error) throw new Error(error.message);

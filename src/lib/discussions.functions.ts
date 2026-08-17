@@ -9,6 +9,7 @@ export const listConversations = createServerFn({ method: "GET" })
     const { data, error } = await context.supabase
       .from("messages_log")
       .select("page_id,sender_id,sender_name,content,ai_response,direction,created_at")
+      .eq("user_id", context.userId)
       .order("created_at", { ascending: false })
       .limit(500);
     if (error) throw new Error(error.message);
@@ -28,7 +29,10 @@ export const listConversations = createServerFn({ method: "GET" })
     }
     const list = Array.from(map.values());
     // Attach IA state
-    const { data: states } = await context.supabase.from("client_ia_state").select("*");
+    const { data: states } = await context.supabase
+      .from("client_ia_state")
+      .select("*")
+      .eq("user_id", context.userId);
     const stateMap = new Map(
       (states ?? []).map((s: any) => [`${s.page_id}::${s.client_fb_id}`, s.ia_stopped]),
     );
@@ -49,6 +53,7 @@ export const listConversationMessages = createServerFn({ method: "POST" })
       .select("*")
       .eq("page_id", data.page_id)
       .eq("sender_id", data.client_fb_id)
+      .eq("user_id", context.userId)
       .order("created_at", { ascending: true })
       .limit(300);
     if (error) throw new Error(error.message);
@@ -72,6 +77,7 @@ export const sendDiscussionMessage = createServerFn({ method: "POST" })
       .from("facebook_pages")
       .select("page_id,page_access_token,page_name")
       .eq("page_id", data.page_id)
+      .eq("user_id", context.userId)
       .maybeSingle();
     if (!page?.page_access_token) throw new Error("Page introuvable ou token manquant");
 
