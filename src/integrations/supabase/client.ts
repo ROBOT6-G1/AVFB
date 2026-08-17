@@ -1,3 +1,4 @@
+// Supabase/Firebase client integration updated for Vercel deployment compatibility
 import { db, auth } from "@/integrations/firebase/config";
 import {
   collection,
