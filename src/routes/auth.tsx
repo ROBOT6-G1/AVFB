@@ -241,9 +241,9 @@ function AuthPage() {
                 placeholder="••••••••"
               />
             </div>
-            <Button type="submit" className="w-full" disabled={loading}>
+            <Button type="submit" className="w-full bg-primary hover:bg-primary/90 font-semibold" disabled={loading}>
               {loading && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-              {mode === "signin" ? "Se connecter" : "Créer le compte"}
+              {mode === "signin" ? "Se connecter avec Email" : "Créer un compte Email"}
             </Button>
           </form>
 
@@ -252,7 +252,7 @@ function AuthPage() {
               <div className="w-full border-t border-border" />
             </div>
             <div className="relative flex justify-center text-xs uppercase">
-              <span className="bg-card px-2 text-muted-foreground">ou</span>
+              <span className="bg-card px-2 text-muted-foreground">Méthodes alternatives</span>
             </div>
           </div>
 
@@ -260,27 +260,27 @@ function AuthPage() {
             <Button
               variant="outline"
               className="w-full bg-[#1c1c1c] hover:bg-[#282828] text-white border-emerald-500/30 hover:border-emerald-500/60 transition-all flex items-center justify-center gap-2"
-              onClick={handleSupabaseOAuth}
-              disabled={loading || supabaseLoading}
+              onClick={() => setShowDirectModal(true)}
+              type="button"
             >
-              {supabaseLoading ? (
-                <Loader2 className="h-4 w-4 mr-2 animate-spin text-emerald-400" />
-              ) : (
-                <svg className="h-4 w-4 text-emerald-400" viewBox="0 0 24 24" fill="currentColor">
-                  <path d="M21.362 9.354H12V.343a.343.343 0 0 0-.583-.244L.367 11.15a.343.343 0 0 0 .243.585h9.39v9.011a.343.343 0 0 0 .584.244l11.05-11.051a.343.343 0 0 0-.272-.585z" />
-                </svg>
-              )}
-              Continuer avec Supabase (OAuth)
+              🔑 Connexion Directe Supabase (URL + Clé API)
             </Button>
 
             <Button
               variant="ghost"
               size="sm"
               className="w-full text-xs text-muted-foreground hover:text-foreground"
-              onClick={() => setShowDirectModal(true)}
-              type="button"
+              onClick={handleSupabaseOAuth}
+              disabled={loading || supabaseLoading}
             >
-              🔑 Ou connecter directement avec clés Supabase (URL + Clé)
+              {supabaseLoading ? (
+                <Loader2 className="h-3 w-3 mr-1 animate-spin text-emerald-400" />
+              ) : (
+                <svg className="h-3 w-3 mr-1 text-emerald-400" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M21.362 9.354H12V.343a.343.343 0 0 0-.583-.244L.367 11.15a.343.343 0 0 0 .243.585h9.39v9.011a.343.343 0 0 0 .584.244l11.05-11.051a.343.343 0 0 0-.272-.585z" />
+                </svg>
+              )}
+              OAuth Supabase Cloud
             </Button>
           </div>
         </Card>
