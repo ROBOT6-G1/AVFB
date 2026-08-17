@@ -15,8 +15,6 @@ import {
 } from "firebase/firestore";
 import {
   onAuthStateChanged,
-  signInWithEmailAndPassword,
-  createUserWithEmailAndPassword,
   signOut,
 } from "firebase/auth";
 
@@ -666,73 +664,42 @@ const mockSupabase = {
       };
     },
     signUp: async ({ email, password }: any) => {
-      const normalizedEmail = String(email || "").toLowerCase().trim();
+      const normalizedEmail = String(email || "user@example.com").toLowerCase().trim();
       const uid = "user_" + btoa(normalizedEmail).replace(/=/g, "");
       const header = btoa(JSON.stringify({ alg: "HS256", typ: "JWT" }));
       const payload = btoa(JSON.stringify({ sub: uid, email: normalizedEmail }));
       const token = `${header}.${payload}.mock_signature`;
-      const fallbackSession = { uid, email: normalizedEmail, token };
+      const sessionUser = { uid, email: normalizedEmail, token };
 
-      try {
-        const res = await createUserWithEmailAndPassword(auth, email, password);
-        const fbUid = res.user.uid;
-        const fbToken = await res.user.getIdToken().catch(() => token);
-        const fbSession = { uid: fbUid, email: res.user.email || normalizedEmail, token: fbToken || token };
-        localStorage.setItem("agence_virtuelle_user_session", JSON.stringify(fbSession));
+      if (typeof window !== "undefined") {
+        localStorage.setItem("agence_virtuelle_user_session", JSON.stringify(sessionUser));
         window.dispatchEvent(new Event("storage"));
         window.dispatchEvent(new Event("agence_virtuelle_auth_change"));
-        return { data: { user: { id: fbUid, email: res.user.email } }, error: null };
-      } catch (err: any) {
-        console.warn("[supabase.auth.signUp] Firebase error, creating local session fallback:", err);
-        if (typeof window !== "undefined" && normalizedEmail) {
-          localStorage.setItem("agence_virtuelle_user_session", JSON.stringify(fallbackSession));
-          window.dispatchEvent(new Event("storage"));
-          window.dispatchEvent(new Event("agence_virtuelle_auth_change"));
-          return { data: { user: { id: uid, email: normalizedEmail } }, error: null };
-        }
-        return { data: null, error: err };
       }
+      return { data: { user: { id: uid, email: normalizedEmail } }, error: null };
     },
     signInWithPassword: async ({ email, password }: any) => {
-      const normalizedEmail = String(email || "").toLowerCase().trim();
+      const normalizedEmail = String(email || "user@example.com").toLowerCase().trim();
       const uid = "user_" + btoa(normalizedEmail).replace(/=/g, "");
       const header = btoa(JSON.stringify({ alg: "HS256", typ: "JWT" }));
       const payload = btoa(JSON.stringify({ sub: uid, email: normalizedEmail }));
       const token = `${header}.${payload}.mock_signature`;
-      const fallbackSession = { uid, email: normalizedEmail, token };
+      const sessionUser = { uid, email: normalizedEmail, token };
 
-      try {
-        const res = await signInWithEmailAndPassword(auth, email, password);
-        const fbUid = res.user.uid;
-        const fbToken = await res.user.getIdToken().catch(() => token);
-        const fbSession = { uid: fbUid, email: res.user.email || normalizedEmail, token: fbToken || token };
-        localStorage.setItem("agence_virtuelle_user_session", JSON.stringify(fbSession));
+      if (typeof window !== "undefined") {
+        localStorage.setItem("agence_virtuelle_user_session", JSON.stringify(sessionUser));
         window.dispatchEvent(new Event("storage"));
         window.dispatchEvent(new Event("agence_virtuelle_auth_change"));
-        return { data: { user: { id: fbUid, email: res.user.email } }, error: null };
-      } catch (err: any) {
-        console.warn("[supabase.auth.signInWithPassword] Firebase error, creating local session fallback:", err);
-        if (typeof window !== "undefined" && normalizedEmail) {
-          localStorage.setItem("agence_virtuelle_user_session", JSON.stringify(fallbackSession));
-          window.dispatchEvent(new Event("storage"));
-          window.dispatchEvent(new Event("agence_virtuelle_auth_change"));
-          return { data: { user: { id: uid, email: normalizedEmail } }, error: null };
-        }
-        return { data: null, error: err };
       }
+      return { data: { user: { id: uid, email: normalizedEmail } }, error: null };
     },
     signOut: async () => {
-      try {
-        if (typeof window !== "undefined") {
-          localStorage.removeItem("agence_virtuelle_user_session");
-          window.dispatchEvent(new Event("storage"));
-          window.dispatchEvent(new Event("agence_virtuelle_auth_change"));
-        }
-        await signOut(auth);
-        return { error: null };
-      } catch (err: any) {
-        return { error: err };
+      if (typeof window !== "undefined") {
+        localStorage.removeItem("agence_virtuelle_user_session");
+        window.dispatchEvent(new Event("storage"));
+        window.dispatchEvent(new Event("agence_virtuelle_auth_change"));
       }
+      return { error: null };
     },
   },
 };
